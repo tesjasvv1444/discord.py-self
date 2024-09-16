@@ -24,38 +24,34 @@ DEALINGS IN THE SOFTWARE.
 
 from __future__ import annotations
 
-from typing import List, Literal, TypedDict
+from typing import Dict, List, Literal, Optional, TypedDict, Union
 from typing_extensions import NotRequired
 
-from .billing import PartialPaymentSource
-from .snowflake import Snowflake
-from .store import PublicSKU
-from .subscriptions import PartialSubscription
+
+class FormError(TypedDict):
+    code: str
+    message: str
 
 
-class PartialPayment(TypedDict):
-    # TODO: There might be more, but I don't have an example payload
-    id: Snowflake
-    amount: int
-    tax: int
-    tax_inclusive: bool
-    currency: str
+class FormErrorWrapper(TypedDict):
+    _errors: List[FormError]
 
 
-class Payment(PartialPayment):
-    amount_refunded: int
-    description: str
-    status: Literal[0, 1, 2, 3, 4, 5]
-    created_at: str
-    sku_id: NotRequired[Snowflake]
-    sku_price: NotRequired[int]
-    sku_subscription_plan_id: NotRequired[Snowflake]
-    payment_gateway: NotRequired[Literal[1, 2, 3, 4, 5, 6]]
-    payment_gateway_payment_id: NotRequired[str]
-    downloadable_invoice: NotRequired[str]
-    downloadable_refund_invoices: NotRequired[List[str]]
-    refund_disqualification_reasons: NotRequired[List[str]]
-    flags: int
-    sku: NotRequired[PublicSKU]
-    payment_source: NotRequired[PartialPaymentSource]
-    subscription: NotRequired[PartialSubscription]
+FormErrors = Union[FormErrorWrapper, Dict[str, 'FormErrors']]
+
+
+class Error(TypedDict):
+    code: int
+    message: str
+    errors: NotRequired[FormErrors]
+
+
+CaptchaService = Literal['hcaptcha', 'recaptcha']
+
+
+class CaptchaRequired(TypedDict):
+    captcha_key: List[str]
+    captcha_service: CaptchaService
+    captcha_sitekey: Optional[str]
+    captcha_rqdata: NotRequired[str]
+    captcha_rqtoken: NotRequired[str]

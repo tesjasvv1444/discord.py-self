@@ -43,11 +43,22 @@ from typing import (
     overload,
 )
 import datetime
+from operator import attrgetter
 
 import discord.abc
 from .scheduled_event import ScheduledEvent
 from .permissions import PermissionOverwrite, Permissions
-from .enums import ChannelType, EntityType, ForumLayoutType, ForumOrderType, PrivacyLevel, try_enum, VideoQualityMode
+from .enums import (
+    ChannelType,
+    EntityType,
+    ForumLayoutType,
+    ForumOrderType,
+    PrivacyLevel,
+    try_enum,
+    VideoQualityMode,
+    DirectoryCategory,
+    DirectoryEntryType,
+)
 from .calls import PrivateCall, GroupCall
 from .mixins import Hashable
 from . import utils
@@ -57,19 +68,21 @@ from .errors import ClientException, DiscordException
 from .stage_instance import StageInstance
 from .threads import Thread
 from .partial_emoji import _EmojiTag, PartialEmoji
-from .flags import ChannelFlags
+from .flags import ChannelFlags, MessageFlags
 from .http import handle_message_parameters
 from .invite import Invite
 from .voice_client import VoiceClient
+from .directory import DirectoryEntry
 
 __all__ = (
     'TextChannel',
     'VoiceChannel',
     'StageChannel',
-    'DMChannel',
     'CategoryChannel',
     'ForumTag',
     'ForumChannel',
+    'DirectoryChannel',
+    'DMChannel',
     'GroupChannel',
     'PartialMessageable',
 )
@@ -98,6 +111,7 @@ if TYPE_CHECKING:
         NewsChannel as NewsChannelPayload,
         VoiceChannel as VoiceChannelPayload,
         StageChannel as StageChannelPayload,
+        DirectoryChannel as DirectoryChannelPayload,
         DMChannel as DMChannelPayload,
         CategoryChannel as CategoryChannelPayload,
         GroupDMChannel as GroupChannelPayload,
@@ -357,6 +371,14 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
         .. versionadded:: 2.1
         """
         return self.read_state.badge_count
+
+    @property
+    def last_viewed_timestamp(self) -> datetime.date:
+        """:class:`datetime.date`: When the channel was last viewed.
+
+        .. versionadded:: 2.1
+        """
+        return self.read_state.last_viewed  # type: ignore
 
     @overload
     async def edit(self) -> Optional[TextChannel]:
@@ -786,7 +808,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
             If ``None`` is passed then a private thread is created.
             Defaults to ``None``.
         auto_archive_duration: :class:`int`
-            The duration in minutes before a thread is automatically archived for inactivity.
+            The duration in minutes before a thread is automatically hidden from the channel list.
             If not provided, the channel's default auto archive duration is used.
 
             Must be one of ``60``, ``1440``, ``4320``, or ``10080``, if provided.
@@ -825,7 +847,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
                 self.id,
                 name=name,
                 auto_archive_duration=auto_archive_duration or self.default_auto_archive_duration,
-                type=type.value,
+                type=type.value,  # type: ignore # we're assuming that the user is passing a valid variant
                 reason=reason,
                 invitable=invitable,
                 rate_limit_per_user=slowmode_delay,
@@ -1137,6 +1159,14 @@ class VocalGuildChannel(discord.abc.Messageable, discord.abc.Connectable, discor
         .. versionadded:: 2.1
         """
         return self.read_state.badge_count
+
+    @property
+    def last_viewed_timestamp(self) -> datetime.date:
+        """:class:`datetime.date`: When the channel was last viewed.
+
+        .. versionadded:: 2.1
+        """
+        return self.read_state.last_viewed  # type: ignore
 
     def get_partial_message(self, message_id: int, /) -> PartialMessage:
         """Creates a :class:`PartialMessage` from the message ID.
@@ -1733,16 +1763,12 @@ class StageChannel(VocalGuildChannel):
         :class:`StageInstance`
             The newly created stage instance.
         """
-
-        payload: Dict[str, Any] = {'channel_id': self.id, 'topic': topic}
-
+        payload = {'channel_id': self.id, 'topic': topic, 'send_start_notification': send_start_notification}
         if privacy_level is not MISSING:
             if not isinstance(privacy_level, PrivacyLevel):
                 raise TypeError('privacy_level field must be of type PrivacyLevel')
 
             payload['privacy_level'] = privacy_level.value
-
-        payload['send_start_notification'] = send_start_notification
 
         data = await self._state.http.create_stage_instance(**payload, reason=reason)
         return StageInstance(guild=self.guild, state=self._state, data=data)
@@ -1783,6 +1809,7 @@ class StageChannel(VocalGuildChannel):
         *,
         name: str = ...,
         nsfw: bool = ...,
+        user_limit: int = ...,
         position: int = ...,
         sync_permissions: int = ...,
         category: Optional[CategoryChannel] = ...,
@@ -1822,6 +1849,8 @@ class StageChannel(VocalGuildChannel):
             The new channel's position.
         nsfw: :class:`bool`
             To mark the channel as NSFW or not.
+        user_limit: :class:`int`
+            The new channel's user limit.
         sync_permissions: :class:`bool`
             Whether to sync permissions with the channel's new or pre-existing
             category. Defaults to ``False``.
@@ -2044,14 +2073,14 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
     def text_channels(self) -> List[TextChannel]:
         """List[:class:`TextChannel`]: Returns the text channels that are under this category."""
         ret = [c for c in self.guild.channels if c.category_id == self.id and isinstance(c, TextChannel)]
-        ret.sort(key=lambda c: (c.position, c.id))
+        ret.sort(key=attrgetter('position', 'id'))
         return ret
 
     @property
     def voice_channels(self) -> List[VoiceChannel]:
         """List[:class:`VoiceChannel`]: Returns the voice channels that are under this category."""
         ret = [c for c in self.guild.channels if c.category_id == self.id and isinstance(c, VoiceChannel)]
-        ret.sort(key=lambda c: (c.position, c.id))
+        ret.sort(key=attrgetter('position', 'id'))
         return ret
 
     @property
@@ -2061,8 +2090,38 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
         .. versionadded:: 1.7
         """
         ret = [c for c in self.guild.channels if c.category_id == self.id and isinstance(c, StageChannel)]
-        ret.sort(key=lambda c: (c.position, c.id))
+        ret.sort(key=attrgetter('position', 'id'))
         return ret
+
+    @property
+    def forums(self) -> List[ForumChannel]:
+        """List[:class:`ForumChannel`]: Returns the forum channels that are under this category.
+
+        .. versionadded:: 2.1
+        """
+        ret = [c for c in self.guild.channels if c.category_id == self.id and isinstance(c, ForumChannel)]
+        ret.sort(key=attrgetter('position', 'id'))
+        return ret
+
+    @property
+    def directory_channels(self) -> List[DirectoryChannel]:
+        """List[:class:`DirectoryChannel`]: Returns the directory channels that are under this category.
+
+        .. versionadded:: 2.1
+        """
+        ret = [c for c in self.guild.channels if c.category_id == self.id and isinstance(c, DirectoryChannel)]
+        ret.sort(key=attrgetter('position', 'id'))
+        return ret
+
+    @property
+    def directories(self) -> List[DirectoryChannel]:
+        """List[:class:`DirectoryChannel`]: Returns the directory channels that are under this category.
+
+        An alias for :attr:`directory_channels`.
+
+        .. versionadded:: 2.1
+        """
+        return self.directory_channels
 
     async def create_text_channel(self, name: str, **options: Any) -> TextChannel:
         """|coro|
@@ -2102,6 +2161,22 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
         """
         return await self.guild.create_stage_channel(name, category=self, **options)
 
+    async def create_directory(self, name: str, **options: Any) -> DirectoryChannel:
+        """|coro|
+
+        A shortcut method to :meth:`Guild.create_directory` to create a :class:`DirectoryChannel` in the category.
+
+        .. versionadded:: 2.1
+
+        Returns
+        --------
+        :class:`DirectoryChannel`
+            The channel that was just created.
+        """
+        return await self.guild.create_directory(name, category=self, **options)
+
+    create_directory_channel = create_directory
+
     async def create_forum(self, name: str, **options: Any) -> ForumChannel:
         """|coro|
 
@@ -2115,6 +2190,8 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
             The channel that was just created.
         """
         return await self.guild.create_forum(name, category=self, **options)
+
+    create_forum_channel = create_forum
 
 
 class ForumTag(Hashable):
@@ -2743,7 +2820,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         name: :class:`str`
             The name of the thread.
         auto_archive_duration: :class:`int`
-            The duration in minutes before a thread is automatically archived for inactivity.
+            The duration in minutes before a thread is automatically hidden from the channel list.
             If not provided, the channel's default auto archive duration is used.
 
             Must be one of ``60``, ``1440``, ``4320``, or ``10080``, if provided.
@@ -2804,8 +2881,6 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
             sticker_ids: SnowflakeList = [s.id for s in stickers]
 
         if suppress_embeds:
-            from .message import MessageFlags  # circular import
-
             flags = MessageFlags._from_value(4)
         else:
             flags = MISSING
@@ -2834,12 +2909,9 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
             flags=flags,
             channel_payload=channel_payload,
         ) as params:
-            # Circular import
-            from .message import Message
-
             data = await state.http.start_thread_in_forum(self.id, params=params, reason=reason)
             thread = Thread(guild=self.guild, state=self._state, data=data)
-            message = Message(state=self._state, channel=thread, data=data['message'])
+            message = state.create_message(channel=thread, data=data['message'])
 
             return ThreadWithMessage(thread=thread, message=message)
 
@@ -2970,6 +3042,372 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
             before_timestamp = update_before(threads[-1])
 
 
+class DirectoryChannel(discord.abc.GuildChannel, Hashable):
+    """Represents a directory channel.
+
+    These channels hold entries for guilds attached to a directory (such as a Student Hub).
+
+    .. container:: operations
+
+        .. describe:: x == y
+
+            Checks if two channels are equal.
+
+        .. describe:: x != y
+
+            Checks if two channels are not equal.
+
+        .. describe:: hash(x)
+
+            Returns the channel's hash.
+
+        .. describe:: str(x)
+
+            Returns the channel's name.
+
+    .. versionadded:: 2.1
+
+    Attributes
+    ----------
+    name: :class:`str`
+        The channel name.
+    guild: :class:`Guild`
+        The guild the channel belongs to.
+    id: :class:`int`
+        The channel ID.
+    category_id: Optional[:class:`int`]
+        The category channel ID this channel belongs to, if applicable.
+    topic: Optional[:class:`str`]
+        The channel's topic. ``None`` if it doesn't exist.
+    position: :class:`int`
+        The position in the channel list. This is a number that starts at 0. e.g. the
+        top channel is position 0.
+    last_message_id: Optional[:class:`int`]
+        The last directory entry ID that was created on this channel. It may
+        *not* point to an existing or valid directory entry.
+    """
+
+    __slots__ = (
+        'name',
+        'id',
+        'guild',
+        'topic',
+        '_state',
+        'category_id',
+        'position',
+        '_overwrites',
+        'last_message_id',
+    )
+
+    def __init__(self, *, state: ConnectionState, guild: Guild, data: DirectoryChannelPayload):
+        self._state: ConnectionState = state
+        self.id: int = int(data['id'])
+        self._update(guild, data)
+
+    def __repr__(self) -> str:
+        attrs = [
+            ('id', self.id),
+            ('name', self.name),
+            ('position', self.position),
+            ('category_id', self.category_id),
+        ]
+        joined = ' '.join('%s=%r' % t for t in attrs)
+        return f'<{self.__class__.__name__} {joined}>'
+
+    def _update(self, guild: Guild, data: DirectoryChannelPayload) -> None:
+        self.guild: Guild = guild
+        self.name: str = data['name']
+        self.category_id: Optional[int] = utils._get_as_snowflake(data, 'parent_id')
+        self.topic: Optional[str] = data.get('topic')
+        self.position: int = data['position']
+        self.last_message_id: Optional[int] = utils._get_as_snowflake(data, 'last_message_id')
+        self._fill_overwrites(data)
+
+    async def _get_channel(self) -> Self:
+        return self
+
+    @property
+    def type(self) -> ChannelType:
+        """:class:`ChannelType`: The channel's Discord type."""
+        return ChannelType.directory
+
+    @property
+    def _sorting_bucket(self) -> int:
+        return ChannelType.directory.value
+
+    @property
+    def _scheduled_event_entity_type(self) -> Optional[EntityType]:
+        return None
+
+    @utils.copy_doc(discord.abc.GuildChannel.permissions_for)
+    def permissions_for(self, obj: Union[Member, Role], /) -> Permissions:
+        base = super().permissions_for(obj)
+        self._apply_implicit_permissions(base)
+
+        # text channels do not have voice related permissions
+        denied = Permissions.voice()
+        base.value &= ~denied.value
+        return base
+
+    @property
+    def members(self) -> List[Member]:
+        """List[:class:`Member`]: Returns all members that can see this channel."""
+        return [m for m in self.guild.members if self.permissions_for(m).read_messages]
+
+    @property
+    def read_state(self) -> ReadState:
+        """:class:`ReadState`: Returns the read state for this channel."""
+        return self._state.get_read_state(self.id)
+
+    @property
+    def acked_message_id(self) -> int:
+        """:class:`int`: The last directory entry ID that the user has acknowledged.
+        It may *not* point to an existing or valid directory entry.
+        """
+        return self.read_state.last_acked_id
+
+    @property
+    def mention_count(self) -> int:
+        """:class:`int`: Returns how many unread directory entries the user has in this channel."""
+        return self.read_state.badge_count
+
+    @property
+    def last_viewed_timestamp(self) -> datetime.date:
+        """:class:`datetime.date`: When the channel was last viewed."""
+        return self.read_state.last_viewed  # type: ignore
+
+    @overload
+    async def edit(self) -> Optional[DirectoryChannel]:
+        ...
+
+    @overload
+    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None:
+        ...
+
+    @overload
+    async def edit(
+        self,
+        *,
+        reason: Optional[str] = ...,
+        name: str = ...,
+        topic: str = ...,
+        position: int = ...,
+        sync_permissions: bool = ...,
+        category: Optional[CategoryChannel] = ...,
+        overwrites: Mapping[OverwriteKeyT, PermissionOverwrite] = ...,
+    ) -> DirectoryChannel:
+        ...
+
+    async def edit(self, *, reason: Optional[str] = None, **options: Any) -> Optional[DirectoryChannel]:
+        """|coro|
+
+        Edits the channel.
+
+        You must have :attr:`~Permissions.manage_channels` to do this.
+
+        Parameters
+        ----------
+        name: :class:`str`
+            The new channel name.
+        topic: :class:`str`
+            The new channel's topic.
+        position: :class:`int`
+            The new channel's position.
+        sync_permissions: :class:`bool`
+            Whether to sync permissions with the channel's new or pre-existing
+            category. Defaults to ``False``.
+        category: Optional[:class:`CategoryChannel`]
+            The new category for this channel. Can be ``None`` to remove the
+            category.
+        reason: Optional[:class:`str`]
+            The reason for editing this channel. Shows up on the audit log.
+        overwrites: :class:`Mapping`
+            A :class:`Mapping` of target (either a role or a member) to
+            :class:`PermissionOverwrite` to apply to the channel.
+
+        Raises
+        ------
+        ValueError
+            The new ``position`` is less than 0 or greater than the number of channels.
+        TypeError
+            The permission overwrite information is not in proper form.
+        Forbidden
+            You do not have permissions to edit the channel.
+        HTTPException
+            Editing the channel failed.
+
+        Returns
+        --------
+        Optional[:class:`.DirectoryChannel`]
+            The newly edited directory channel. If the edit was only positional
+            then ``None`` is returned instead.
+        """
+        payload = await self._edit(options, reason=reason)
+        if payload is not None:
+            # the payload will always be the proper channel payload
+            return self.__class__(state=self._state, guild=self.guild, data=payload)  # type: ignore
+
+    @utils.copy_doc(discord.abc.GuildChannel.clone)
+    async def clone(self, *, name: Optional[str] = None, reason: Optional[str] = None) -> DirectoryChannel:
+        return await self._clone_impl({'topic': self.topic}, name=name, reason=reason)
+
+    async def counts(self) -> Dict[DirectoryCategory, int]:
+        """|coro|
+
+        Gets the number of entries in each category.
+
+        Raises
+        -------
+        Forbidden
+            You don't have permissions to get the counts.
+        HTTPException
+            Getting the counts failed.
+
+        Returns
+        --------
+        Dict[:class:`DirectoryCategory`, :class:`int`]
+            The counts for each category.
+        """
+        data = await self._state.http.get_directory_counts(self.id)
+        return {try_enum(DirectoryCategory, int(k)): v for k, v in data.items()}
+
+    async def entries(
+        self,
+        *,
+        type: Optional[DirectoryEntryType] = None,
+        category: Optional[DirectoryCategory] = None,
+    ) -> List[DirectoryEntry]:
+        """|coro|
+
+        Gets the directory entries in this channel.
+
+        Raises
+        -------
+        Forbidden
+            You don't have permissions to get the entries.
+        HTTPException
+            Getting the entries failed.
+
+        Returns
+        --------
+        List[:class:`DirectoryEntry`]
+            The entries in this channel.
+        """
+        state = self._state
+        data = await state.http.get_directory_entries(
+            self.id, type=type.value if type else None, category_id=category.value if category else None
+        )
+        return [DirectoryEntry(state=state, data=e, channel=self) for e in data]
+
+    async def fetch_entries(self, *entity_ids: int) -> List[DirectoryEntry]:
+        r"""|coro|
+
+        Gets a list of partial directory entries by their IDs.
+
+        .. note::
+
+            These :class:`DirectoryEntry` objects do not have :attr:`DirectoryEntry.guild`.
+
+        Parameters
+        -----------
+        \*entity_ids: :class:`int`
+            The IDs of the entries to fetch.
+
+        Raises
+        -------
+        Forbidden
+            You don't have permissions to get the entries.
+        HTTPException
+            Getting the entries failed.
+
+        Returns
+        --------
+        List[:class:`DirectoryEntry`]
+            The entries in this channel.
+        """
+        if not entity_ids:
+            return []
+
+        state = self._state
+        data = await state.http.get_some_directory_entries(self.id, entity_ids)
+        return [DirectoryEntry(state=state, data=e, channel=self) for e in data]
+
+    async def search_entries(
+        self,
+        query: str,
+        /,
+        *,
+        category: Optional[DirectoryCategory] = None,
+    ) -> List[DirectoryEntry]:
+        """|coro|
+
+        Searches for directory entries in this channel.
+
+        Parameters
+        -----------
+        query: :class:`str`
+            The query to search for.
+
+        Raises
+        -------
+        Forbidden
+            You don't have permissions to search the entries.
+        HTTPException
+            Searching the entries failed.
+
+        Returns
+        --------
+        List[:class:`DirectoryEntry`]
+            The entries in this channel.
+        """
+        state = self._state
+        data = await state.http.search_directory_entries(self.id, query, category_id=category.value if category else None)
+        return [DirectoryEntry(state=state, data=e, channel=self) for e in data]
+
+    async def create_entry(
+        self,
+        guild: Snowflake,
+        *,
+        category: DirectoryCategory = DirectoryCategory.uncategorized,
+        description: Optional[str] = None,
+    ) -> DirectoryEntry:
+        """|coro|
+
+        Creates a directory entry in this channel.
+
+        Parameters
+        -----------
+        guild: :class:`Guild`
+            The guild to create the entry for.
+        category: :class:`DirectoryCategory`
+            The category to create the entry in.
+        description: Optional[:class:`str`]
+            The description of the entry.
+
+        Raises
+        -------
+        Forbidden
+            You don't have permissions to create the entry.
+        HTTPException
+            Creating the entry failed.
+
+        Returns
+        --------
+        :class:`DirectoryEntry`
+            The created entry.
+        """
+        # While the API supports `type`, only guilds seem to be supported at the moment
+        # So we hide all that from the user and just accept a `guild`
+        state = self._state
+        data = await state.http.create_directory_entry(
+            self.id,
+            guild.id,
+            primary_category_id=(category or DirectoryCategory.uncategorized).value,
+            description=description or '',
+        )
+        return DirectoryEntry(state=state, data=data, channel=self)
+
+
 class DMChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc.PrivateChannel, Hashable):
     """Represents a Discord direct message channel.
 
@@ -3020,7 +3458,6 @@ class DMChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc.Pr
         '_requested_at',
         '_spam',
         '_state',
-        '_accessed',
     )
 
     def __init__(self, *, me: ClientUser, state: ConnectionState, data: DMChannelPayload):
@@ -3029,7 +3466,6 @@ class DMChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc.Pr
         self.me: ClientUser = me
         self.id: int = int(data['id'])
         self._update(data)
-        self._accessed: bool = False
 
     def _update(self, data: DMChannelPayload) -> None:
         self.last_message_id: Optional[int] = utils._get_as_snowflake(data, 'last_message_id')
@@ -3048,9 +3484,6 @@ class DMChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc.Pr
         return PrivateCall(**kwargs)
 
     async def _get_channel(self) -> Self:
-        if not self._accessed:
-            await self._state.call_connect(self.id)
-            self._accessed = True
         return self
 
     async def _initial_ring(self) -> None:
@@ -3201,6 +3634,14 @@ class DMChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc.Pr
         return self.read_state.badge_count
 
     @property
+    def last_viewed_timestamp(self) -> datetime.date:
+        """:class:`datetime.date`: When the channel was last viewed.
+
+        .. versionadded:: 2.1
+        """
+        return self.read_state.last_viewed  # type: ignore
+
+    @property
     def requested_at(self) -> Optional[datetime.datetime]:
         """Optional[:class:`datetime.datetime`]: Returns the message request's creation time in UTC, if applicable.
 
@@ -3220,7 +3661,7 @@ class DMChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc.Pr
 
         .. versionadded:: 2.0
         """
-        return self._message_request if self._message_request is not None else True
+        return not self._message_request if self._message_request is not None else True
 
     def is_spam(self) -> bool:
         """:class:`bool`: Indicates if the direct message is a spam message request.
@@ -3466,7 +3907,6 @@ class GroupChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc
         'name',
         'me',
         '_state',
-        '_accessed',
     )
 
     def __init__(self, *, me: ClientUser, state: ConnectionState, data: GroupChannelPayload):
@@ -3474,7 +3914,6 @@ class GroupChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc
         self.id: int = int(data['id'])
         self.me: ClientUser = me
         self._update(data)
-        self._accessed: bool = False
 
     def _update(self, data: GroupChannelPayload) -> None:
         self.owner_id: int = int(data['owner_id'])
@@ -3494,9 +3933,6 @@ class GroupChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc
         return self.me.id, self.id
 
     async def _get_channel(self) -> Self:
-        if not self._accessed:
-            await self._state.call_connect(self.id)
-            self._accessed = True
         return self
 
     def _initial_ring(self):
@@ -3662,6 +4098,14 @@ class GroupChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc
         """
         return self.read_state.badge_count
 
+    @property
+    def last_viewed_timestamp(self) -> datetime.date:
+        """:class:`datetime.date`: When the channel was last viewed.
+
+        .. versionadded:: 2.1
+        """
+        return self.read_state.last_viewed  # type: ignore
+
     def permissions_for(self, obj: Snowflake, /) -> Permissions:
         """Handles permission resolution for a :class:`User`.
 
@@ -3729,7 +4173,7 @@ class GroupChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc
             An argument list of users to add to this group.
             If the user is of type :class:`Object`, then the ``nick`` attribute
             is used as the nickname for the added recipient.
-        nicks: Optional[Dict[:class:`~discord.abc.Snowflake`, :class:`str`]]
+        nicks: Optional[Mapping[:class:`~discord.abc.Snowflake`, :class:`str`]]
             A mapping of user IDs to nicknames to use for the added recipients.
 
             .. versionadded:: 2.0
@@ -4010,6 +4454,14 @@ class PartialMessageable(discord.abc.Messageable, Hashable):
         """:class:`datetime.datetime`: Returns the channel's creation time in UTC."""
         return utils.snowflake_time(self.id)
 
+    @property
+    def read_state(self) -> ReadState:
+        """:class:`ReadState`: Returns the read state for this channel.
+
+        .. versionadded:: 2.1
+        """
+        return self._state.get_read_state(self.id)
+
     def permissions_for(self, obj: Any = None, /) -> Permissions:
         """Handles permission resolution for a :class:`User`.
 
@@ -4065,6 +4517,8 @@ def _guild_channel_factory(channel_type: int):
         return TextChannel, value
     elif value is ChannelType.stage_voice:
         return StageChannel, value
+    elif value is ChannelType.directory:
+        return DirectoryChannel, value
     elif value is ChannelType.forum:
         return ForumChannel, value
     else:

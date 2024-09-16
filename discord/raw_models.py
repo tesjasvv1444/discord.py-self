@@ -24,9 +24,10 @@ DEALINGS IN THE SOFTWARE.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Literal, Optional, Set, List, Tuple, Union
 
 from .enums import ChannelType, ReadStateType, try_enum
+from .utils import _get_as_snowflake
 
 if TYPE_CHECKING:
     from .guild import Guild
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
     from .state import ConnectionState
     from .threads import Thread
     from .types.gateway import (
+        GuildMemberRemoveEvent,
         IntegrationDeleteEvent,
         MessageAckEvent,
         MessageDeleteBulkEvent as BulkMessageDeleteEvent,
@@ -49,8 +51,10 @@ if TYPE_CHECKING:
         ThreadDeleteEvent,
         ThreadMembersUpdate,
     )
+    from .user import User
 
     ReactionActionEvent = Union[MessageReactionAddEvent, MessageReactionRemoveEvent]
+    ReactionActionType = Literal['REACTION_ADD', 'REACTION_REMOVE']
 
 
 __all__ = (
@@ -63,6 +67,7 @@ __all__ = (
     'RawIntegrationDeleteEvent',
     'RawThreadDeleteEvent',
     'RawThreadMembersUpdate',
+    'RawMemberRemoveEvent',
     'RawMessageAckEvent',
     'RawUserFeatureAckEvent',
     'RawGuildFeatureAckEvent',
@@ -189,7 +194,10 @@ class RawReactionActionEvent(_RawReprMixin):
         The member who added the reaction. Only available if ``event_type`` is ``REACTION_ADD`` and the reaction is inside a guild.
 
         .. versionadded:: 1.3
+    message_author_id: Optional[:class:`int`]
+        The author ID of the message being reacted to. Only available if ``event_type`` is ``REACTION_ADD``.
 
+        .. versionadded:: 2.1
     event_type: :class:`str`
         The event type that triggered this action. Can be
         ``REACTION_ADD`` for reaction addition or
@@ -198,15 +206,16 @@ class RawReactionActionEvent(_RawReprMixin):
         .. versionadded:: 1.3
     """
 
-    __slots__ = ('message_id', 'user_id', 'channel_id', 'guild_id', 'emoji', 'event_type', 'member')
+    __slots__ = ('message_id', 'user_id', 'channel_id', 'guild_id', 'emoji', 'event_type', 'member', 'message_author_id')
 
-    def __init__(self, data: ReactionActionEvent, emoji: PartialEmoji, event_type: str) -> None:
+    def __init__(self, data: ReactionActionEvent, emoji: PartialEmoji, event_type: ReactionActionType) -> None:
         self.message_id: int = int(data['message_id'])
         self.channel_id: int = int(data['channel_id'])
         self.user_id: int = int(data['user_id'])
         self.emoji: PartialEmoji = emoji
-        self.event_type: str = event_type
+        self.event_type: ReactionActionType = event_type
         self.member: Optional[Member] = None
+        self.message_author_id: Optional[int] = _get_as_snowflake(data, 'message_author_id')
 
         try:
             self.guild_id: Optional[int] = int(data['guild_id'])
@@ -349,6 +358,26 @@ class RawThreadMembersUpdate(_RawReprMixin):
         self.guild_id: int = int(data['guild_id'])
         self.member_count: int = int(data['member_count'])
         self.data: ThreadMembersUpdate = data
+
+
+class RawMemberRemoveEvent(_RawReprMixin):
+    """Represents the payload for a :func:`on_raw_member_remove` event.
+
+    .. versionadded:: 2.1
+
+    Attributes
+    ----------
+    user: Union[:class:`discord.User`, :class:`discord.Member`]
+        The user that left the guild.
+    guild_id: :class:`int`
+        The ID of the guild the user left.
+    """
+
+    __slots__ = ('user', 'guild_id')
+
+    def __init__(self, data: GuildMemberRemoveEvent, user: User, /) -> None:
+        self.user: Union[User, Member] = user
+        self.guild_id: int = int(data['guild_id'])
 
 
 class RawMessageAckEvent(_RawReprMixin):

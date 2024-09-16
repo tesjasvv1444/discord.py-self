@@ -45,14 +45,6 @@ Client
     .. automethod:: Client.event()
         :decorator:
 
-CaptchaHandler
-~~~~~~~~~~~~~~
-
-.. attributetable:: CaptchaHandler
-
-.. autoclass:: CaptchaHandler
-    :members:
-
 Voice Related
 ---------------
 
@@ -388,6 +380,7 @@ Debug
     :param payload: The message that is about to be passed on to the
                     WebSocket library. It can be :class:`bytes` to denote a binary
                     message or :class:`str` to denote a regular text message.
+    :type payload: Union[:class:`bytes`, :class:`str`]
 
 Gateway
 ~~~~~~~~
@@ -824,18 +817,14 @@ Guilds
     :param after: A list of stickers after the update.
     :type after: Sequence[:class:`GuildSticker`]
 
-.. function:: on_application_command_counts_update(guild, before, after)
+.. function:: on_application_command_index_update(guild)
 
-    Called when a :class:`Guild`\'s application command counts are updated.
+    Called when a :class:`Guild`\'s application command index is updated.
 
-    .. versionadded:: 2.0
+    .. versionadded:: 2.1
 
     :param guild: The guild who got their application command counts updated.
     :type guild: :class:`Guild`
-    :param before: A namedtuple of application command counts before the update.
-    :type before: :class:`ApplicationCommandCounts`
-    :param after: A namedtuple of application command counts after the update.
-    :type after: :class:`ApplicationCommandCounts`
 
 .. function:: on_audit_log_entry_create(entry)
 
@@ -986,12 +975,33 @@ Members
 ~~~~~~~~
 
 .. function:: on_member_join(member)
-              on_member_remove(member)
 
-    Called when a :class:`Member` join or leaves a :class:`Guild`.
+    Called when a :class:`Member` joins a :class:`Guild`.
 
-    :param member: The member who joined or left.
+    :param member: The member who joined.
     :type member: :class:`Member`
+
+.. function:: on_member_remove(member)
+
+    Called when a :class:`Member` leaves a :class:`Guild`.
+
+    If the guild or member could not be found in the internal cache this event
+    will not be called, you may use :func:`on_raw_member_remove` instead.
+
+    :param member: The member who left.
+    :type member: :class:`Member`
+
+.. function:: on_raw_member_remove(payload)
+
+    Called when a :class:`Member` leaves a :class:`Guild`.
+
+    Unlike :func:`on_member_remove`
+    this is called regardless of the guild or member being in the internal cache.
+
+    .. versionadded:: 2.1
+
+    :param payload: The raw event payload data.
+    :type payload: :class:`RawMemberRemoveEvent`
 
 .. function:: on_member_update(before, after)
 
@@ -1559,7 +1569,7 @@ Threads
     .. versionadded:: 2.0
 
     :param payload: The raw event payload data.
-    :type member: :class:`RawThreadMembersUpdate`
+    :type payload: :class:`RawThreadMembersUpdate`
 
 Voice
 ~~~~~~
@@ -1690,21 +1700,27 @@ of :class:`enum.Enum`.
 
     .. attribute:: news_thread
 
-        A news thread
+        A news thread.
 
         .. versionadded:: 2.0
 
     .. attribute:: public_thread
 
-        A public thread
+        A public thread.
 
         .. versionadded:: 2.0
 
     .. attribute:: private_thread
 
-        A private thread
+        A private thread.
 
         .. versionadded:: 2.0
+
+    .. attribute:: directory
+
+        A directory channel.
+
+        .. versionadded:: 2.1
 
     .. attribute:: forum
 
@@ -3095,6 +3111,18 @@ of :class:`enum.Enum`.
 
         .. versionadded:: 2.0
 
+    .. attribute:: creator_monetization_request_created
+
+        A request to monetize the server was created.
+
+        .. versionadded:: 2.1
+
+    .. attribute:: creator_monetization_terms_accepted
+
+        The terms and conditions for creator monetization were accepted.
+
+        .. versionadded:: 2.1
+
 .. class:: AuditLogActionCategory
 
     Represents the category that the :class:`AuditLogAction` belongs to.
@@ -3444,6 +3472,50 @@ of :class:`enum.Enum`.
 
         The activity is locked to landscape.
 
+.. class:: EmbeddedActivityLabelType
+
+    Represents the label shown by an embedded activity.
+
+    .. versionadded:: 2.1
+
+    .. attribute:: none
+
+        No special label.
+
+    .. attribute:: new
+
+        The activity is new.
+
+    .. attribute:: updated
+
+        The activity has been recently updated.
+
+.. class:: EmbeddedActivityReleasePhase
+
+    Represents the release phase of an embedded activity for a specific :class:`EmbeddedActivityPlatform`.
+
+    .. versionadded:: 2.1
+
+    .. attribute:: in_development
+
+        The activity is still in development.
+
+    .. attribute:: activities_team
+
+        The activity is available to guilds with the `ACTIVITIES_INTERNAL_DEV` guild feature.
+
+    .. attribute:: employee_release
+
+        The activity is available to guilds with the `ACTIVITIES_EMPLOYEE` guild feature.
+
+    .. attribute:: soft_launch
+
+        The activity is available to guilds with the `ACTIVITIES_ALPHA` guild feature.
+
+    .. attribute:: global_launch
+
+        The activity is available to all guilds.
+
 .. class:: PayoutAccountStatus
 
     Represents the status of a team payout account.
@@ -3502,7 +3574,7 @@ of :class:`enum.Enum`.
 
     .. attribute:: canceled
 
-        Alias for :attr:`cancelled`.
+        An alias for :attr:`cancelled`.
 
     .. attribute:: deferred
 
@@ -3534,7 +3606,7 @@ of :class:`enum.Enum`.
 
     .. attribute:: pending_funds
 
-        The payout is pending fund transfer.
+        The payout is pending sufficient funds.
 
 .. class:: PayoutReportType
 
@@ -3594,12 +3666,12 @@ of :class:`enum.Enum`.
 
     .. attribute:: blurple
 
-        Represents the default avatar with the color blurple.
+        Represents the default avatar with the colour blurple.
         See also :attr:`Colour.blurple`
 
     .. attribute:: grey
 
-        Represents the default avatar with the color grey.
+        Represents the default avatar with the colour grey.
         See also :attr:`Colour.greyple`
 
     .. attribute:: gray
@@ -3608,23 +3680,22 @@ of :class:`enum.Enum`.
 
     .. attribute:: green
 
-        Represents the default avatar with the color green.
+        Represents the default avatar with the colour green.
         See also :attr:`Colour.green`
 
     .. attribute:: orange
 
-        Represents the default avatar with the color orange.
+        Represents the default avatar with the colour orange.
         See also :attr:`Colour.orange`
 
     .. attribute:: red
 
-        Represents the default avatar with the color red.
+        Represents the default avatar with the colour red.
         See also :attr:`Colour.red`
-
     .. attribute:: pink
 
-        Represents the default avatar with the color pink.
-        This is not currently used in the client.
+        Represents the default avatar with the colour pink.
+        See also :attr:`Colour.pink`
 
 .. class:: StickerType
 
@@ -3787,6 +3858,16 @@ of :class:`enum.Enum`.
 
         .. versionadded:: 2.0
 
+.. class:: FriendSuggestionReasonType
+
+    Specifies the type of :class:`FriendSuggestionReason`.
+
+    .. versionadded:: 2.1
+
+    .. attribute:: external_friend
+
+        You are friends with this user on another platform.
+
 .. class:: UserContentFilter
 
     Represents the options found in ``Settings > Privacy & Safety > Safe Direct Messaging``
@@ -3807,6 +3888,12 @@ of :class:`enum.Enum`.
 .. class:: PremiumType
 
     Represents the user's Discord Nitro subscription type.
+
+    .. attribute:: none
+
+        The user does not have a Discord Nitro subscription.
+
+        .. versionadded:: 2.0
 
     .. attribute:: nitro
 
@@ -3895,6 +3982,12 @@ of :class:`enum.Enum`.
     .. attribute:: ideal
 
         The payment source is an iDEAL account.
+
+    .. attribute:: cash_app
+
+        The payment source is a Cash App account.
+
+        .. versionadded:: 2.1
 
 .. class:: PaymentGateway
 
@@ -4119,7 +4212,7 @@ of :class:`enum.Enum`.
 
     .. attribute:: canceled
 
-        Alias for :attr:`PaymentStatus.cancelled`.
+        An alias for :attr:`PaymentStatus.cancelled`.
 
 .. class:: EntitlementType
 
@@ -4158,6 +4251,83 @@ of :class:`enum.Enum`.
     .. attribute:: application_subscription
 
         The entitlement is an application subscription.
+
+.. class:: RefundReason
+
+    Represents the reason for a refund.
+
+    .. versionadded:: 2.1
+
+    .. attribute:: other
+
+        The refund is due to another reason.
+
+    .. attribute:: gifting_refund
+
+        The refund is due to an unwanted gift.
+
+    .. attribute:: buyers_remorse
+
+        The refund is due to buyer's remorse.
+
+    .. attribute:: wrong_purchase
+
+        The refund is due to a wrong purchase.
+
+    .. attribute:: forgot_to_cancel
+
+        The refund is due to forgetting to cancel a subscription.
+
+    .. attribute:: premium_guild_cooldown
+
+        The refund is due to a premium guild (boosting) cooldown.
+
+    .. attribute:: user_confusion
+
+        The refund is due to user confusion.
+
+    .. attribute:: want_to_switch_tiers
+
+        The refund is due to wanting to switch premium (Nitro) tiers.
+
+    .. attribute:: dont_need
+
+        The refund is due to not needing the purchase.
+
+.. class:: RefundDisqualificationReason
+
+    Represents the reason for a refund disqualification.
+
+    .. versionadded:: 2.1
+
+    .. attribute:: other
+
+        The purchase is disqualified from a refund due to another reason.
+
+    .. attribute:: already_refunded
+
+        The purchase is disqualified from a refund because it has already been refunded.
+
+    .. attribute:: not_user_refundable_type
+
+        The purchase is disqualified from a refund because it is not a user refundable type.
+        The user must contact Discord support to request a refund.
+
+    .. attribute:: past_refundable_date
+
+        The purchase is disqualified from a refund because it is past the refundable date.
+
+    .. attribute:: entitlement_already_consumed
+
+        The purchase is disqualified from a refund because the purchased entitlement has already been consumed.
+
+    .. attribute:: already_refunded_premium
+
+        The purchase is disqualified from a refund because the user has already refunded a premium (Nitro) purchase.
+
+    .. attribute:: already_refunded_premium_guild
+
+        The purchase is disqualified from a refund because the user has already refunded a premium guild (boosting) purchase.
 
 .. class:: SKUType
 
@@ -4206,6 +4376,40 @@ of :class:`enum.Enum`.
     .. attribute:: vip_access
 
         The SKU is available to VIP users only.
+
+.. class:: SKUProductLine
+
+    Represents the product line of a SKU.
+
+    .. versionadded:: 2.1
+
+    .. attribute:: premium
+
+        The SKU is a premium (Nitro) product.
+
+    .. attribute:: premium_guild
+
+        The SKU is a premium guild product.
+
+    .. attribute:: iap
+
+        The SKU is an embedded in-app purchase.
+
+    .. attribute:: guild_role
+
+        The SKU is a guild role subscription.
+
+    .. attribute:: guild_product
+
+        The SKU is a guild product.
+
+    .. attribute:: application
+
+        The SKU is an application subscription.
+
+    .. attribute:: collectible
+
+        The SKU is a collectible avatar decoration or profile effect.
 
 .. class:: SKUFeature
 
@@ -4991,6 +5195,12 @@ of :class:`enum.Enum`.
 
         The ``en-US`` locale.
 
+    .. attribute:: arabic
+
+        The ``ar`` locale.
+
+        .. versionadded:: 2.1
+
     .. attribute:: british_english
 
         The ``en-GB`` locale.
@@ -5014,12 +5224,6 @@ of :class:`enum.Enum`.
     .. attribute:: czech
 
         The ``cs`` locale.
-
-    .. attribute:: indonesian
-
-        The ``id`` locale.
-
-        .. versionadded:: 2.0
 
     .. attribute:: danish
 
@@ -5053,6 +5257,10 @@ of :class:`enum.Enum`.
 
         The ``hu`` locale.
 
+    .. attribute:: indonesian
+
+        The ``id`` locale.
+
     .. attribute:: italian
 
         The ``it`` locale.
@@ -5064,6 +5272,12 @@ of :class:`enum.Enum`.
     .. attribute:: korean
 
         The ``ko`` locale.
+
+    .. attribute:: latin_american_spanish
+
+        The ``es-419`` locale.
+
+        .. versionadded:: 2.1
 
     .. attribute:: lithuanian
 
@@ -5664,6 +5878,67 @@ of :class:`enum.Enum`.
 
         Represents a guild-bound read state for guild onboarding. Only one exists per guild.
 
+.. class:: DirectoryEntryType
+
+    Represents the type of a directory entry.
+
+    .. versionadded:: 2.1
+
+    .. attribute:: guild
+
+        Represents a guild directory entry.
+
+    .. attribute:: scheduled_event
+
+        Represents a broadcasted scheduled event directory entry.
+
+.. class:: DirectoryCategory
+
+    Represents the category of a directory entry.
+
+    .. versionadded:: 2.1
+
+    .. attribute:: uncategorized
+
+        The directory entry is uncategorized.
+
+    .. attribute:: school_club
+
+        The directory entry is a school club.
+
+    .. attribute:: class_subject
+
+        The directory entry is a class/subject.
+
+    .. attribute:: study_social
+
+        The directory entry is a study/social venue.
+
+    .. attribute:: miscellaneous
+
+        The directory entry is miscellaneous.
+
+.. class:: HubType
+
+    Represents the type of Student Hub a guild is.
+
+    .. versionadded:: 2.1
+
+    .. attribute:: default
+
+        The Student Hub is not categorized as a high school or post-secondary institution.
+
+    .. attribute:: high_school
+
+        The Student Hub is for a high school.
+
+    .. attribute:: college
+
+        The Student Hub is for a post-secondary institution (college or university).
+
+    .. attribute:: university
+
+        An alias for :attr:`college`.
 
 .. _discord-api-audit-logs:
 
@@ -5762,6 +6037,12 @@ AuditLogDiff
 
         :type: :class:`str`
 
+    .. attribute:: guild
+
+        The guild of something.
+
+        :type: :class:`Guild`
+
     .. attribute:: icon
 
         A guild's or role's icon. See also :attr:`Guild.icon` or :attr:`Role.icon`.
@@ -5791,6 +6072,12 @@ AuditLogDiff
         The guild's owner. See also :attr:`Guild.owner`
 
         :type: Union[:class:`Member`, :class:`User`]
+
+    .. attribute:: application_id
+
+        The application ID of the guild owner (if applicable). See also :attr:`Guild.application_id`.
+
+        :type: :class:`int`
 
     .. attribute:: afk_channel
 
@@ -6330,7 +6617,39 @@ AuditLogDiff
 
         :type: :class:`ChannelFlags`
 
-.. this is currently missing the following keys: reason and application_id
+    .. attribute:: default_thread_slowmode_delay
+
+        The default slowmode delay for threads created in this text channel or forum.
+
+        See also :attr:`TextChannel.default_thread_slowmode_delay` and :attr:`ForumChannel.default_thread_slowmode_delay`
+
+        :type: :class:`int`
+
+    .. attribute:: applied_tags
+
+        The applied tags of a forum post.
+
+        See also :attr:`Thread.applied_tags`
+
+        :type: List[Union[:class:`ForumTag`, :class:`Object`]]
+
+    .. attribute:: available_tags
+
+        The available tags of a forum.
+
+        See also :attr:`ForumChannel.available_tags`
+
+        :type: Sequence[:class:`ForumTag`]
+
+    .. attribute:: default_reaction_emoji
+
+        The default_reaction_emoji for forum posts.
+
+        See also :attr:`ForumChannel.default_reaction_emoji`
+
+        :type: :class:`default_reaction_emoji`
+
+.. this is currently missing the following keys: reason
    I'm not sure how to port these
 
 Webhook Support
@@ -6524,6 +6843,11 @@ User
     :members:
     :inherited-members:
 
+.. attributetable:: ProfileMetadata
+
+.. autoclass:: ProfileMetadata()
+    :members:
+
 .. attributetable:: ProfileBadge
 
 .. autoclass:: ProfileBadge()
@@ -6703,6 +7027,11 @@ Application
 .. attributetable:: EmbeddedActivityConfig
 
 .. autoclass:: EmbeddedActivityConfig()
+    :members:
+
+.. attributetable:: EmbeddedActivityPlatformConfig
+
+.. autoclass:: EmbeddedActivityPlatformConfig()
     :members:
 
 .. attributetable:: UnverifiedApplication
@@ -6961,7 +7290,6 @@ Metadata
 
 .. autoclass:: Metadata()
     :members:
-    :inherited-members:
 
 ReadState
 ~~~~~~~~~
@@ -7013,28 +7341,6 @@ Guild
         The :class:`User` that was banned.
 
         :type: :class:`User`
-
-.. class:: ApplicationCommandCounts
-
-    A namedtuple which represents the application command counts for a guild.
-
-    .. attribute:: chat_input
-
-        The number of chat input (slash) commands.
-
-        :type: :class:`int`
-
-    .. attribute:: user
-
-        The number of user commands.
-
-        :type: :class:`int`
-
-    .. attribute:: message
-
-        The number of message commands.
-
-        :type: :class:`int`
 
 Role
 ~~~~~
@@ -7233,6 +7539,12 @@ GuildChannel
 .. attributetable:: StageChannel
 
 .. autoclass:: StageChannel()
+    :members:
+    :inherited-members:
+
+.. attributetable:: DirectoryChannel
+
+.. autoclass:: DirectoryChannel()
     :members:
     :inherited-members:
 
@@ -7594,6 +7906,11 @@ RawEvent
 .. autoclass:: RawThreadDeleteEvent()
     :members:
 
+.. attributetable:: RawMemberRemoveEvent
+
+.. autoclass:: RawMemberRemoveEvent()
+    :members:
+
 .. attributetable:: RawMessageAckEvent
 
 .. autoclass:: RawMessageAckEvent()
@@ -7723,12 +8040,58 @@ Permissions
 .. autoclass:: PermissionOverwrite()
     :members:
 
+DirectoryEntry
+~~~~~~~~~~~~~~~
+
+.. attributetable:: DirectoryEntry
+
+.. autoclass:: DirectoryEntry()
+    :members:
+
 ForumTag
 ~~~~~~~~~
 
 .. attributetable:: ForumTag
 
-.. autoclass:: ForumTag
+.. autoclass:: ForumTag()
+    :members:
+
+Experiment
+~~~~~~~~~~
+
+.. attributetable:: UserExperiment
+
+.. autoclass:: UserExperiment()
+    :members:
+
+.. attributetable:: GuildExperiment
+
+.. autoclass:: GuildExperiment()
+    :members:
+
+.. attributetable:: HoldoutExperiment
+
+.. autoclass:: HoldoutExperiment()
+    :members:
+
+.. attributetable:: ExperimentOverride
+
+.. autoclass:: ExperimentOverride()
+    :members:
+
+.. attributetable:: ExperimentPopulation
+
+.. autoclass:: ExperimentPopulation()
+    :members:
+
+.. attributetable:: ExperimentFilters
+
+.. autoclass:: ExperimentFilters()
+    :members:
+
+.. attributetable:: ExperimentRollout
+
+.. autoclass:: ExperimentRollout()
     :members:
 
 Flags
@@ -7744,19 +8107,14 @@ Flags
 .. autoclass:: ApplicationDiscoveryFlags()
     :members:
 
-.. attributetable:: LibraryApplicationFlags
+.. attributetable:: AttachmentFlags
 
-.. autoclass:: LibraryApplicationFlags()
+.. autoclass:: AttachmentFlags()
     :members:
 
 .. attributetable:: ChannelFlags
 
 .. autoclass:: ChannelFlags()
-    :members:
-
-.. attributetable:: SystemChannelFlags
-
-.. autoclass:: SystemChannelFlags()
     :members:
 
 .. attributetable:: FriendSourceFlags
@@ -7779,9 +8137,24 @@ Flags
 .. autoclass:: HubProgressFlags()
     :members:
 
+.. attributetable:: InviteFlags
+
+.. autoclass:: InviteFlags()
+    :members:
+
+.. attributetable:: LibraryApplicationFlags
+
+.. autoclass:: LibraryApplicationFlags()
+    :members:
+
 .. attributetable:: MemberFlags
 
 .. autoclass:: MemberFlags()
+    :members:
+
+.. attributetable:: MemberCacheFlags
+
+.. autoclass:: MemberCacheFlags()
     :members:
 
 .. attributetable:: MessageFlags
@@ -7830,14 +8203,19 @@ Flags
 .. autoclass:: PromotionFlags()
     :members:
 
+.. attributetable:: ReadStateFlags
+
+.. autoclass:: ReadStateFlags()
+    :members:
+
 .. attributetable:: SKUFlags
 
 .. autoclass:: SKUFlags()
     :members:
 
-.. attributetable:: MemberCacheFlags
+.. attributetable:: SystemChannelFlags
 
-.. autoclass:: MemberCacheFlags()
+.. autoclass:: SystemChannelFlags()
     :members:
 
 
@@ -7859,8 +8237,12 @@ The following exceptions are thrown by the library.
     :members:
 
 .. autoexception:: Forbidden
+    :members:
+    :inherited-members:
 
 .. autoexception:: NotFound
+    :members:
+    :inherited-members:
 
 .. autoexception:: CaptchaRequired
     :members:
@@ -7873,6 +8255,7 @@ The following exceptions are thrown by the library.
 .. autoexception:: GatewayNotFound
 
 .. autoexception:: ConnectionClosed
+    :members:
 
 .. autoexception:: discord.opus.OpusError
 

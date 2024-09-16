@@ -239,12 +239,8 @@ class Asset(AssetMixin):
         )
 
     @classmethod
-    def _from_avatar_decoration(cls, state: _State, user_id: int, decoration: str) -> Self:
-        # Avatar decoration presets are not available through the regular CDN endpoint
-        if decoration.startswith(('v1_', 'v2_')):
-            url = f'{cls.BASE}/avatar-decoration-presets/{decoration}.png?size=256&passthrough=true'
-        else:
-            url = f'{cls.BASE}/avatar-decorations/{user_id}/{decoration}.png?size=256&passthrough=true'
+    def _from_avatar_decoration(cls, state: _State, decoration: str) -> Self:
+        url = f'{cls.BASE}/avatar-decoration-presets/{decoration}.png?size=256&passthrough=true'
         return cls(state, url=url, key=decoration, animated=False, passthrough=True)
 
     @classmethod
@@ -449,7 +445,7 @@ class Asset(AssetMixin):
             else:
                 if static_format is MISSING and format not in VALID_STATIC_FORMATS:
                     raise ValueError(f'format must be one of {VALID_STATIC_FORMATS}')
-            query = url.query
+            query = dict(url.query)
             if self._passthrough:
                 query['passthrough'] = 'false'
             url = url.with_path(f'{path}.{format}').with_query(query)
@@ -457,7 +453,7 @@ class Asset(AssetMixin):
         if static_format is not MISSING and not self._animated:
             if static_format not in VALID_STATIC_FORMATS:
                 raise ValueError(f'static_format must be one of {VALID_STATIC_FORMATS}')
-            query = url.query
+            query = dict(url.query)
             if self._passthrough:
                 query['passthrough'] = 'false'
             url = url.with_path(f'{path}.{static_format}').with_query(query)
@@ -465,7 +461,7 @@ class Asset(AssetMixin):
         if size is not MISSING or passthrough is not MISSING or keep_aspect_ratio:
             if size is not MISSING and not utils.valid_icon_size(size):
                 raise ValueError('size must be a power of 2 between 16 and 4096')
-            query = url.query
+            query = dict(url.query)
             if size is not MISSING:
                 query['size'] = str(size)
                 if passthrough is MISSING and self._passthrough:
@@ -480,7 +476,7 @@ class Asset(AssetMixin):
                 query['keep_aspect_ratio'] = 'true'
             url = url.with_query(query)
         else:
-            url = url.with_query(url.raw_query_string)
+            url = url.with_query(url.query)
 
         url = str(url)
         return Asset(state=self._state, url=url, key=self._key, animated=self._animated, passthrough=passthrough)  # type: ignore
@@ -551,7 +547,7 @@ class Asset(AssetMixin):
 
         url = yarl.URL(self._url)
         path, _ = os.path.splitext(url.path)
-        query = url.query
+        query = dict(url.query)
         if self._passthrough:
             query['passthrough'] = 'false'
 

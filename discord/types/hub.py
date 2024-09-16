@@ -1,7 +1,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-present Rapptz
+Copyright (c) 2021-present Dolfies
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -22,67 +22,31 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
-from typing import Optional, TypedDict, List, Literal
+from typing import List, Optional, TypedDict
 from typing_extensions import NotRequired
 
+from .guild import Guild
 from .snowflake import Snowflake
-from .member import MemberWithUser
 
 
-SupportedModes = Literal['xsalsa20_poly1305_lite', 'xsalsa20_poly1305_suffix', 'xsalsa20_poly1305']
-
-
-class BaseVoiceState(TypedDict):
+class HubWaitlist(TypedDict):
+    email: str
+    email_domain: str
+    school: str
     user_id: Snowflake
-    session_id: str
-    deaf: bool
-    mute: bool
-    self_deaf: bool
-    self_mute: bool
-    self_video: bool
-    suppress: bool
-    member: NotRequired[MemberWithUser]
-    self_stream: NotRequired[bool]
 
 
-class VoiceState(BaseVoiceState):
-    channel_id: Snowflake
-
-
-class PrivateVoiceState(BaseVoiceState):
-    channel_id: Optional[Snowflake]
-
-
-class GuildVoiceState(PrivateVoiceState):
-    guild_id: Snowflake
-
-
-class VoiceRegion(TypedDict):
-    id: str
+class HubGuild(TypedDict):
+    id: Snowflake
     name: str
-    vip: bool
-    optimal: bool
-    deprecated: bool
-    custom: bool
+    icon: Optional[str]
 
 
-class VoiceServerUpdate(TypedDict):
-    token: str
-    guild_id: Snowflake
-    channel_id: Snowflake
-    endpoint: Optional[str]
+class EmailDomainLookup(TypedDict):
+    guilds_info: NotRequired[List[HubGuild]]
+    has_matching_guild: bool
 
 
-class VoiceIdentify(TypedDict):
-    server_id: Snowflake
-    user_id: Snowflake
-    session_id: str
-    token: str
-
-
-class VoiceReady(TypedDict):
-    ssrc: int
-    ip: str
-    port: int
-    modes: List[SupportedModes]
-    heartbeat_interval: int
+class EmailDomainVerification(TypedDict):
+    guild: Guild
+    joined: bool

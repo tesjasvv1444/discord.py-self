@@ -56,7 +56,7 @@ from .errors import HTTPException
 from .components import _component_factory
 from .embeds import Embed
 from .member import Member
-from .flags import MessageFlags
+from .flags import MessageFlags, AttachmentFlags
 from .file import File
 from .utils import escape_mentions, MISSING
 from .http import handle_message_parameters
@@ -87,7 +87,7 @@ if TYPE_CHECKING:
 
     from .types.interactions import MessageInteraction as MessageInteractionPayload
 
-    from .types.components import Component as ComponentPayload
+    from .types.components import MessageActionRow as ComponentPayload
     from .types.threads import ThreadArchiveDuration
     from .types.member import (
         Member as MemberPayload,
@@ -98,7 +98,7 @@ if TYPE_CHECKING:
     from .types.gateway import MessageReactionRemoveEvent, MessageUpdateEvent
     from .abc import Snowflake
     from .abc import GuildChannel, MessageableChannel
-    from .components import ActionRow, ActionRowChildComponentType
+    from .components import ActionRow
     from .file import _FileBase
     from .state import ConnectionState
     from .mentions import AllowedMentions
@@ -107,7 +107,6 @@ if TYPE_CHECKING:
     from .role import Role
 
     EmojiInputType = Union[Emoji, PartialEmoji, str]
-    MessageComponentType = Union[ActionRow, ActionRowChildComponentType]
 
 
 __all__ = (
@@ -191,6 +190,14 @@ class Attachment(Hashable):
         Whether the attachment is ephemeral.
 
         .. versionadded:: 2.0
+    duration: Optional[:class:`float`]
+        The duration of the audio file in seconds. Returns ``None`` if it's not a voice message.
+
+        .. versionadded:: 2.1
+    waveform: Optional[:class:`bytes`]
+        The waveform (amplitudes) of the audio in bytes. Returns ``None`` if it's not a voice message.
+
+        .. versionadded:: 2.1
     """
 
     __slots__ = (
@@ -205,6 +212,9 @@ class Attachment(Hashable):
         'content_type',
         'description',
         'ephemeral',
+        'duration',
+        'waveform',
+        '_flags',
     )
 
     def __init__(self, *, data: AttachmentPayload, state: ConnectionState):
@@ -219,10 +229,28 @@ class Attachment(Hashable):
         self.content_type: Optional[str] = data.get('content_type')
         self.description: Optional[str] = data.get('description')
         self.ephemeral: bool = data.get('ephemeral', False)
+        self.duration: Optional[float] = data.get('duration_secs')
+
+        waveform = data.get('waveform')
+        self.waveform: Optional[bytes] = utils._base64_to_bytes(waveform) if waveform is not None else None
+
+        self._flags: int = data.get('flags', 0)
+
+    @property
+    def flags(self) -> AttachmentFlags:
+        """:class:`AttachmentFlags`: The attachment's flags."""
+        return AttachmentFlags._from_value(self._flags)
 
     def is_spoiler(self) -> bool:
         """:class:`bool`: Whether this attachment contains a spoiler."""
         return self.filename.startswith('SPOILER_')
+
+    def is_voice_message(self) -> bool:
+        """:class:`bool`: Whether this attachment is a voice message.
+
+        .. versionadded:: 2.1
+        """
+        return self.waveform is not None
 
     def __repr__(self) -> str:
         return f'<Attachment id={self.id} filename={self.filename!r} url={self.url!r}>'
@@ -630,11 +658,15 @@ class PartialMessage(Hashable):
         The channel associated with this partial message.
     id: :class:`int`
         The message ID.
+    guild_id: Optional[:class:`int`]
+        The ID of the guild that the partial message belongs to, if applicable.
+
+        .. versionadded:: 2.1
     guild: Optional[:class:`Guild`]
         The guild that the partial message belongs to, if applicable.
     """
 
-    __slots__ = ('channel', 'id', '_cs_guild', '_state', 'guild')
+    __slots__ = ('channel', 'id', '_state', 'guild_id', 'guild')
 
     def __init__(self, *, channel: MessageableChannel, id: int) -> None:
         if not isinstance(channel, PartialMessageable) and channel.type not in (
@@ -656,6 +688,12 @@ class PartialMessage(Hashable):
         self.id: int = id
 
         self.guild: Optional[Guild] = getattr(channel, 'guild', None)
+        self.guild_id: Optional[int] = self.guild.id if self.guild else None
+        if hasattr(channel, 'guild_id'):
+            if self.guild_id is not None:
+                channel.guild_id = self.guild_id  # type: ignore
+            else:
+                self.guild_id = channel.guild_id  # type: ignore
 
     def _update(self, data: MessageUpdateEvent) -> None:
         # This is used for duck typing purposes.
@@ -1077,7 +1115,7 @@ class PartialMessage(Hashable):
         name: :class:`str`
             The name of the thread.
         auto_archive_duration: :class:`int`
-            The duration in minutes before a thread is automatically archived for inactivity.
+            The duration in minutes before a thread is automatically hidden from the channel list.
             If not provided, the channel's default auto archive duration is used.
 
             Must be one of ``60``, ``1440``, ``4320``, or ``10080``, if provided.
@@ -1144,7 +1182,7 @@ class PartialMessage(Hashable):
         HTTPException
             Acking failed.
         """
-        await self._state.http.ack_message(self.channel.id, self.id, manual=manual, mention_count=mention_count)
+        await self.channel.read_state.ack(self.id, manual=manual, mention_count=mention_count)
 
     async def unack(self, *, mention_count: Optional[int] = None) -> None:
         """|coro|
@@ -1164,7 +1202,7 @@ class PartialMessage(Hashable):
         HTTPException
             Unacking failed.
         """
-        await self._state.http.ack_message(self.channel.id, self.id - 1, manual=True, mention_count=mention_count)
+        await self.channel.read_state.ack(self.id - 1, manual=True, mention_count=mention_count)
 
     @overload
     async def reply(
@@ -1459,6 +1497,10 @@ class Message(PartialMessage, Hashable):
         the approximate position of the message in a thread.
 
         .. versionadded:: 2.0
+    guild_id: Optional[:class:`int`]
+        The ID of the guild that the partial message belongs to, if applicable.
+
+        .. versionadded:: 2.1
     guild: Optional[:class:`Guild`]
         The guild that the message belongs to, if applicable.
     interaction: Optional[:class:`Interaction`]
@@ -1530,7 +1572,7 @@ class Message(PartialMessage, Hashable):
         mentions: List[Union[User, Member]]
         author: Union[User, Member]
         role_mentions: List[Role]
-        components: List[MessageComponentType]
+        components: List[ActionRow]
 
     def __init__(
         self,
@@ -1565,7 +1607,14 @@ class Message(PartialMessage, Hashable):
             # If the channel doesn't have a guild attribute, we handle that
             self.guild = channel.guild
         except AttributeError:
-            self.guild = state._get_guild(utils._get_as_snowflake(data, 'guild_id'))
+            guild_id = utils._get_as_snowflake(data, 'guild_id')
+            if guild_id is not None:
+                channel.guild_id = guild_id  # type: ignore
+            else:
+                guild_id = channel.guild_id  # type: ignore
+
+            self.guild_id: Optional[int] = guild_id
+            self.guild = state._get_guild(guild_id)
 
         self.application: Optional[IntegrationApplication] = None
         try:
@@ -1751,7 +1800,7 @@ class Message(PartialMessage, Hashable):
         self.nonce = value
 
     def _handle_author(self, author: UserPayload) -> None:
-        self.author = self._state.store_user(author)
+        self.author = self._state.store_user(author, cache=self.webhook_id is None)
         if isinstance(self.guild, Guild):
             found = self.guild.get_member(self.author.id)
             if found is not None:
@@ -1790,12 +1839,12 @@ class Message(PartialMessage, Hashable):
                 r.append(Member._try_upgrade(data=mention, guild=guild, state=state))
 
     def _handle_mention_roles(self, role_mentions: List[int]) -> None:
-        self.role_mentions = []
+        self.role_mentions = r = []
         if isinstance(self.guild, Guild):
             for role_id in map(int, role_mentions):
                 role = self.guild.get_role(role_id)
                 if role is not None:
-                    self.role_mentions.append(role)
+                    r.append(role)
 
     def _handle_call(self, call: Optional[CallPayload]) -> None:
         if call is None or self.type is not MessageType.call:
@@ -1815,10 +1864,8 @@ class Message(PartialMessage, Hashable):
 
     def _handle_components(self, data: List[ComponentPayload]) -> None:
         self.components = []
-
         for component_data in data:
             component = _component_factory(component_data, self)
-
             if component is not None:
                 self.components.append(component)
 
@@ -2002,7 +2049,7 @@ class Message(PartialMessage, Hashable):
                 return f'{self.author.name} changed the channel name: **{self.content}**'
 
         if self.type is MessageType.channel_icon_change:
-            return f'{self.author.name} changed the channel icon.'
+            return f'{self.author.name} changed the group icon.'
 
         if self.type is MessageType.pins_add:
             return f'{self.author.name} pinned a message to this channel.'
@@ -2291,6 +2338,7 @@ class Message(PartialMessage, Hashable):
         """
         return await self.edit(attachments=[a for a in self.attachments if a not in attachments])
 
+    @utils.deprecated("Message.channel.application_commands")
     def message_commands(
         self,
         query: Optional[str] = None,
@@ -2301,6 +2349,8 @@ class Message(PartialMessage, Hashable):
         with_applications: bool = True,
     ) -> AsyncIterator[MessageCommand]:
         """Returns a :term:`asynchronous iterator` of the message commands available to use on the message.
+
+        .. deprecated:: 2.1
 
         Examples
         ---------
@@ -2321,13 +2371,8 @@ class Message(PartialMessage, Hashable):
         ----------
         query: Optional[:class:`str`]
             The query to search for. Specifying this limits results to 25 commands max.
-
-            This parameter is faked if ``application`` is specified.
         limit: Optional[:class:`int`]
-            The maximum number of commands to send back. Defaults to 0 if ``command_ids`` is passed, else 25.
-            If ``None``, returns all commands.
-
-            This parameter is faked if ``application`` is specified.
+            The maximum number of commands to send back. If ``None``, returns all commands.
         command_ids: Optional[List[:class:`int`]]
             List of up to 100 command IDs to search for. If the command doesn't exist, it won't be returned.
 
@@ -2336,7 +2381,7 @@ class Message(PartialMessage, Hashable):
         application: Optional[:class:`~discord.abc.Snowflake`]
             Whether to return this application's commands. Always set to DM recipient in a private channel context.
         with_applications: :class:`bool`
-            Whether to include applications in the response. Defaults to ``True``.
+            Whether to include applications in the response.
 
         Raises
         ------
@@ -2364,6 +2409,5 @@ class Message(PartialMessage, Hashable):
             limit=limit,
             command_ids=command_ids,
             application=application,
-            with_applications=with_applications,
             target=self,
         )

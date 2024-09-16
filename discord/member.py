@@ -37,7 +37,7 @@ from .asset import Asset
 from .utils import MISSING
 from .user import BaseUser, User, _UserTag
 from .permissions import Permissions
-from .enums import RelationshipAction, Status, try_enum
+from .enums import Status, try_enum
 from .errors import ClientException
 from .colour import Colour
 from .object import Object
@@ -60,7 +60,7 @@ if TYPE_CHECKING:
     from .guild import Guild
     from .profile import MemberProfile
     from .types.activity import (
-        PartialPresenceUpdate,
+        BasePresenceUpdate,
     )
     from .types.member import (
         MemberWithUser as MemberWithUserPayload,
@@ -73,13 +73,11 @@ if TYPE_CHECKING:
     from .state import ConnectionState, Presence
     from .message import Message
     from .role import Role
-    from .types.voice import (
-        GuildVoiceState as GuildVoiceStatePayload,
-        VoiceState as VoiceStatePayload,
-    )
+    from .types.voice import BaseVoiceState as VoiceStatePayload
     from .user import Note
     from .relationship import Relationship
     from .calls import PrivateCall
+    from .enums import PremiumType
 
     VocalGuildChannel = Union[VoiceChannel, StageChannel]
     ConnectableChannel = Union[VocalGuildChannel, DMChannel, GroupChannel]
@@ -146,13 +144,11 @@ class VoiceState:
         'suppress',
     )
 
-    def __init__(
-        self, *, data: Union[VoiceStatePayload, GuildVoiceStatePayload], channel: Optional[ConnectableChannel] = None
-    ):
+    def __init__(self, *, data: VoiceStatePayload, channel: Optional[ConnectableChannel] = None):
         self.session_id: Optional[str] = data.get('session_id')
         self._update(data, channel)
 
-    def _update(self, data: Union[VoiceStatePayload, GuildVoiceStatePayload], channel: Optional[ConnectableChannel]):
+    def _update(self, data: VoiceStatePayload, channel: Optional[ConnectableChannel]):
         self.self_mute: bool = data.get('self_mute', False)
         self.self_deaf: bool = data.get('self_deaf', False)
         self.self_stream: bool = data.get('self_stream', False)
@@ -189,7 +185,7 @@ def flatten_user(cls: T) -> T:
 
         # If it's a slotted attribute or a property, redirect it
         # Slotted members are implemented as member_descriptors in Type.__dict__
-        if not hasattr(value, '__annotations__'):
+        if not hasattr(value, '__annotations__') or isinstance(value, utils.CachedSlotProperty):
             getter = attrgetter('_user.' + attr)
             setattr(cls, attr, property(getter, doc=f'Equivalent to :attr:`User.{attr}`'))
         else:
@@ -243,7 +239,7 @@ class Member(discord.abc.Messageable, discord.abc.Connectable, _UserTag):
 
         .. describe:: str(x)
 
-            Returns the member's name with the discriminator.
+            Returns the member's handle (e.g. ``name`` or ``name#discriminator``).
 
     Attributes
     ----------
@@ -253,7 +249,7 @@ class Member(discord.abc.Messageable, discord.abc.Connectable, _UserTag):
     guild: :class:`Guild`
         The guild that the member belongs to.
     nick: Optional[:class:`str`]
-        The guild specific nickname of the user.
+        The guild specific nickname of the user. Takes precedence over the global name.
     pending: :class:`bool`
         Whether the member is pending member verification.
 
@@ -287,12 +283,14 @@ class Member(discord.abc.Messageable, discord.abc.Connectable, _UserTag):
         name: str
         id: int
         discriminator: str
+        global_name: Optional[str]
         bot: bool
         system: bool
         created_at: datetime.datetime
         default_avatar: Asset
         avatar: Optional[Asset]
         avatar_decoration: Optional[Asset]
+        avatar_decoration_sku_id: Optional[int]
         note: Note
         relationship: Optional[Relationship]
         is_friend: Callable[[], bool]
@@ -303,8 +301,9 @@ class Member(discord.abc.Messageable, discord.abc.Connectable, _UserTag):
         block: Callable[[], Awaitable[None]]
         unblock: Callable[[], Awaitable[None]]
         remove_friend: Callable[[], Awaitable[None]]
-        mutual_guilds: List[Guild]
+        fetch_mutual_friends: Callable[[], Awaitable[List[User]]]
         public_flags: PublicUserFlags
+        premium_type: Optional[PremiumType]
         banner: Optional[Asset]
         accent_color: Optional[Colour]
         accent_colour: Optional[Colour]
@@ -328,7 +327,7 @@ class Member(discord.abc.Messageable, discord.abc.Connectable, _UserTag):
 
     def __repr__(self) -> str:
         return (
-            f'<Member id={self._user.id} name={self._user.name!r} discriminator={self._user.discriminator!r}'
+            f'<Member id={self._user.id} name={self._user.name!r} global_name={self._user.global_name!r}'
             f' bot={self._user.bot} nick={self.nick!r} guild={self.guild!r}>'
         )
 
@@ -388,7 +387,7 @@ class Member(discord.abc.Messageable, discord.abc.Connectable, _UserTag):
         self._user = member._user
         return self
 
-    def _update(self, data: GuildMemberUpdateEvent) -> Optional[Member]:
+    def _update(self, data: Union[GuildMemberUpdateEvent, MemberWithUserPayload]) -> Optional[Member]:
         old = Member._copy(self)
 
         # Some changes are optional
@@ -415,7 +414,7 @@ class Member(discord.abc.Messageable, discord.abc.Connectable, _UserTag):
             return old
 
     def _presence_update(
-        self, data: PartialPresenceUpdate, user: Union[PartialUserPayload, Tuple[()]]
+        self, data: BasePresenceUpdate, user: Union[PartialUserPayload, Tuple[()]]
     ) -> Optional[Tuple[User, User]]:
         self._presence = self._state.create_presence(data)
         return self._user._update_self(user)
@@ -537,11 +536,11 @@ class Member(discord.abc.Messageable, discord.abc.Connectable, _UserTag):
     def display_name(self) -> str:
         """:class:`str`: Returns the user's display name.
 
-        For regular users this is just their username, but
-        if they have a guild specific nickname then that
+        For regular users this is just their global name or their username,
+        but if they have a guild specific nickname then that
         is returned instead.
         """
-        return self.nick or self.name
+        return self.nick or self.global_name or self.name
 
     @property
     def display_avatar(self) -> Asset:
@@ -1106,20 +1105,6 @@ class Member(discord.abc.Messageable, discord.abc.Connectable, _UserTag):
         if self.timed_out_until is not None:
             return utils.utcnow() < self.timed_out_until
         return False
-
-    async def send_friend_request(self) -> None:
-        """|coro|
-
-        Sends the member a friend request.
-
-        Raises
-        -------
-        Forbidden
-            Not allowed to send a friend request to the member.
-        HTTPException
-            Sending the friend request failed.
-        """
-        await self._state.http.add_relationship(self._user.id, action=RelationshipAction.send_friend_request)
 
     async def profile(
         self,

@@ -75,6 +75,7 @@ if TYPE_CHECKING:
     from ..types.webhook import (
         Webhook as WebhookPayload,
         SourceGuild as SourceGuildPayload,
+        SourceChannel as SourceChannelPayload,
     )
     from ..types.message import (
         Message as MessagePayload,
@@ -82,9 +83,6 @@ if TYPE_CHECKING:
     from ..types.user import (
         User as UserPayload,
         PartialUser as PartialUserPayload,
-    )
-    from ..types.channel import (
-        PartialChannel as PartialChannelPayload,
     )
     from ..types.emoji import PartialEmoji as PartialEmojiPayload
 
@@ -443,7 +441,7 @@ class PartialWebhookChannel(Hashable):
 
     __slots__ = ('id', 'name')
 
-    def __init__(self, *, data: PartialChannelPayload) -> None:
+    def __init__(self, *, data: SourceChannelPayload) -> None:
         self.id: int = int(data['id'])
         self.name: str = data['name']
 
@@ -511,9 +509,9 @@ class _WebhookState:
             return self._parent._get_guild(guild_id)
         return None
 
-    def store_user(self, data: Union[UserPayload, PartialUserPayload]) -> BaseUser:
+    def store_user(self, data: Union[UserPayload, PartialUserPayload], *, cache: bool = True) -> BaseUser:
         if self._parent is not None:
-            return self._parent.store_user(data)
+            return self._parent.store_user(data, cache=cache)
         # state parameter is artificial
         return BaseUser(state=self, data=data)  # type: ignore
 
@@ -1063,7 +1061,7 @@ class Webhook(BaseWebhook):
             A partial :class:`Webhook`.
             A partial webhook is just a webhook object with an ID and a token.
         """
-        m = re.search(r'discord(?:app)?\.com/api/webhooks/(?P<id>[0-9]{17,20})/(?P<token>[A-Za-z0-9\.\-\_]{60,68})', url)
+        m = re.search(r'discord(?:app)?\.com/api/webhooks/(?P<id>[0-9]{17,20})/(?P<token>[A-Za-z0-9\.\-\_]{60,})', url)
         if m is None:
             raise ValueError('Invalid webhook URL given')
 
@@ -1299,8 +1297,7 @@ class Webhook(BaseWebhook):
                 proxy_auth=self.proxy_auth,
                 reason=reason,
             )
-
-        if prefer_auth and self.auth_token:
+        elif prefer_auth and self.auth_token:
             data = await adapter.edit_webhook(
                 self.id,
                 self.auth_token,
