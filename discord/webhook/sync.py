@@ -44,7 +44,7 @@ from .. import utils
 from ..errors import HTTPException, Forbidden, NotFound, DiscordServerError
 from ..message import Message, MessageFlags
 from ..http import Route, handle_message_parameters
-from ..channel import PartialMessageable
+from ..channel import PartialMessageable, ForumTag
 
 from .async_ import BaseWebhook, _WebhookState
 
@@ -61,6 +61,7 @@ if TYPE_CHECKING:
 
     from ..file import File
     from ..embeds import Embed
+    from ..poll import Poll
     from ..mentions import AllowedMentions
     from ..message import Attachment
     from ..abc import Snowflake
@@ -71,6 +72,7 @@ if TYPE_CHECKING:
     from ..types.message import (
         Message as MessagePayload,
     )
+    from ..types.snowflake import SnowflakeList
 
     BE = TypeVar('BE', bound=BaseException)
 
@@ -607,7 +609,7 @@ class SyncWebhook(BaseWebhook):
         self.session: Session = session
 
     def __repr__(self) -> str:
-        return f'<Webhook id={self.id!r}>'
+        return f'<Webhook id={self.id!r} type={self.type!r} name={self.name!r}>'
 
     @property
     def url(self) -> str:
@@ -681,7 +683,7 @@ class SyncWebhook(BaseWebhook):
             A partial :class:`SyncWebhook`.
             A partial :class:`SyncWebhook` is just a :class:`SyncWebhook` object with an ID and a token.
         """
-        m = re.search(r'discord(?:app)?\.com/api/webhooks/(?P<id>[0-9]{17,20})/(?P<token>[A-Za-z0-9\.\-\_]{60,68})', url)
+        m = re.search(r'discord(?:app)?\.com/api/webhooks/(?P<id>[0-9]{17,20})/(?P<token>[A-Za-z0-9\.\-\_]{60,})', url)
         if m is None:
             raise ValueError('Invalid webhook URL given')
 
@@ -834,8 +836,7 @@ class SyncWebhook(BaseWebhook):
 
             payload['channel_id'] = channel.id
             data = adapter.edit_webhook(self.id, self.auth_token, payload=payload, session=self.session, reason=reason)
-
-        if prefer_auth and self.auth_token:
+        elif prefer_auth and self.auth_token:
             data = adapter.edit_webhook(self.id, self.auth_token, payload=payload, session=self.session, reason=reason)
         elif self.token:
             data = adapter.edit_webhook_with_token(self.id, self.token, payload=payload, session=self.session, reason=reason)
@@ -870,6 +871,8 @@ class SyncWebhook(BaseWebhook):
         wait: Literal[True],
         suppress_embeds: bool = MISSING,
         silent: bool = MISSING,
+        applied_tags: List[ForumTag] = MISSING,
+        poll: Poll = MISSING,
     ) -> SyncWebhookMessage:
         ...
 
@@ -891,6 +894,8 @@ class SyncWebhook(BaseWebhook):
         wait: Literal[False] = ...,
         suppress_embeds: bool = MISSING,
         silent: bool = MISSING,
+        applied_tags: List[ForumTag] = MISSING,
+        poll: Poll = MISSING,
     ) -> None:
         ...
 
@@ -911,6 +916,8 @@ class SyncWebhook(BaseWebhook):
         wait: bool = False,
         suppress_embeds: bool = False,
         silent: bool = False,
+        applied_tags: List[ForumTag] = MISSING,
+        poll: Poll = MISSING,
     ) -> Optional[SyncWebhookMessage]:
         """Sends a message using the webhook.
 
@@ -975,6 +982,14 @@ class SyncWebhook(BaseWebhook):
             in the UI, but will not actually send a notification.
 
             .. versionadded:: 2.0
+        poll: :class:`Poll`
+            The poll to send with this message.
+
+            .. warning::
+
+                When sending a Poll via webhook, you cannot manually end it.
+
+            .. versionadded:: 2.1
 
         Raises
         --------
@@ -1014,6 +1029,11 @@ class SyncWebhook(BaseWebhook):
         if thread_name is not MISSING and thread is not MISSING:
             raise TypeError('Cannot mix thread_name and thread keyword arguments.')
 
+        if applied_tags is MISSING:
+            applied_tag_ids = MISSING
+        else:
+            applied_tag_ids: SnowflakeList = [tag.id for tag in applied_tags]
+
         with handle_message_parameters(
             content=content,
             username=username,
@@ -1027,6 +1047,8 @@ class SyncWebhook(BaseWebhook):
             allowed_mentions=allowed_mentions,
             previous_allowed_mentions=previous_mentions,
             flags=flags,
+            applied_tags=applied_tag_ids,
+            poll=poll,
         ) as params:
             adapter: WebhookAdapter = _get_webhook_adapter()
             thread_id: Optional[int] = None
@@ -1044,8 +1066,15 @@ class SyncWebhook(BaseWebhook):
                 wait=wait,
             )
 
+        msg = None
+
         if wait:
-            return self._create_message(data, thread=thread)
+            msg = self._create_message(data, thread=thread)
+
+        if poll is not MISSING and msg:
+            poll._update(msg)
+
+        return msg
 
     def fetch_message(self, id: int, /, *, thread: Snowflake = MISSING) -> SyncWebhookMessage:
         """Retrieves a single :class:`~discord.SyncWebhookMessage` owned by this webhook.

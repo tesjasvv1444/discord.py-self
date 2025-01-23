@@ -29,7 +29,7 @@ from .scheduled_event import GuildScheduledEvent
 from .sticker import GuildSticker
 from .snowflake import Snowflake
 from .channel import GuildChannel, StageInstance
-from .voice import GuildVoiceState
+from .voice import VoiceState
 from .welcome_screen import WelcomeScreen
 from .activity import PartialPresenceUpdate
 from .role import Role
@@ -49,6 +49,11 @@ class UnavailableGuild(TypedDict):
     unavailable: NotRequired[bool]
 
 
+class IncidentData(TypedDict):
+    invites_disabled_until: NotRequired[Optional[str]]
+    dms_disabled_until: NotRequired[Optional[str]]
+
+
 DefaultMessageNotificationLevel = Literal[0, 1]
 ExplicitContentFilterLevel = Literal[0, 1, 2]
 MFALevel = Literal[0, 1]
@@ -66,26 +71,27 @@ class BaseGuild(TypedDict):
 
 
 class PartialGuild(BaseGuild):
-    name: str
-    icon: Optional[str]
+    description: Optional[str]
     splash: Optional[str]
     discovery_splash: Optional[str]
+    home_header: Optional[str]
+
+
+class _GuildMedia(PartialGuild):
     emojis: List[Emoji]
     stickers: List[GuildSticker]
-    features: List[str]
-    description: Optional[str]
 
 
-class _GuildPreviewUnique(TypedDict):
+class _GuildCounts(TypedDict):
     approximate_member_count: int
     approximate_presence_count: int
 
 
-class GuildPreview(PartialGuild, _GuildPreviewUnique):
+class GuildPreview(_GuildMedia, _GuildCounts):
     ...
 
 
-class Guild(UnavailableGuild, PartialGuild):
+class Guild(UnavailableGuild, _GuildMedia):
     owner_id: Snowflake
     region: str
     afk_channel_id: Optional[Snowflake]
@@ -115,7 +121,7 @@ class Guild(UnavailableGuild, PartialGuild):
     joined_at: NotRequired[Optional[str]]
     large: NotRequired[bool]
     member_count: NotRequired[int]
-    voice_states: NotRequired[List[GuildVoiceState]]
+    voice_states: NotRequired[List[VoiceState]]
     members: NotRequired[List[MemberWithUser]]
     channels: NotRequired[List[GuildChannel]]
     presences: NotRequired[List[PartialPresenceUpdate]]
@@ -124,7 +130,11 @@ class Guild(UnavailableGuild, PartialGuild):
     max_members: NotRequired[int]
     premium_subscription_count: NotRequired[int]
     max_video_channel_users: NotRequired[int]
-    application_command_counts: ApplicationCommandCounts
+    max_stage_video_channel_users: NotRequired[int]
+    # application_command_counts: ApplicationCommandCounts
+    hub_type: Optional[Literal[0, 1, 2]]
+    incidents_data: Optional[IncidentData]
+    safety_alerts_channel_id: Optional[Snowflake]
 
 
 class UserGuild(BaseGuild):
@@ -134,11 +144,23 @@ class UserGuild(BaseGuild):
     approximate_presence_count: NotRequired[int]
 
 
-class InviteGuild(Guild, total=False):
-    welcome_screen: WelcomeScreen
+class InviteGuild(TypedDict):
+    id: Snowflake
+    name: str
+    icon: Optional[str]
+    description: Optional[str]
+    banner: Optional[str]
+    splash: Optional[str]
+    verification_level: VerificationLevel
+    features: List[str]
+    vanity_url_code: Optional[str]
+    premium_subscription_count: NotRequired[int]
+    nsfw: bool
+    nsfw_level: NSFWLevel
+    welcome_screen: NotRequired[WelcomeScreen]
 
 
-class GuildWithCounts(Guild, _GuildPreviewUnique):
+class GuildWithCounts(Guild, _GuildCounts):
     ...
 
 
@@ -175,4 +197,14 @@ class CommandScopeMigration(TypedDict):
 
 class SupplementalGuild(UnavailableGuild):
     embedded_activities: list
-    voice_states: List[GuildVoiceState]
+    voice_states: List[VoiceState]
+
+
+class BulkBanUserResponse(TypedDict):
+    banned_users: Optional[List[Snowflake]]
+    failed_users: Optional[List[Snowflake]]
+
+
+class RTCRegion(TypedDict):
+    region: str
+    ips: List[str]

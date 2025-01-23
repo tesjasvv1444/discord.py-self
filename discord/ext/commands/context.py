@@ -33,8 +33,10 @@ from typing import (
     Generic,
     List,
     Optional,
+    Sequence,
     TypeVar,
     Union,
+    overload,
 )
 
 import discord.abc
@@ -49,9 +51,14 @@ if TYPE_CHECKING:
 
     from discord.abc import MessageableChannel
     from discord.commands import MessageCommand
+    from discord.file import _FileBase
     from discord.guild import Guild
     from discord.member import Member
+    from discord.mentions import AllowedMentions
+    from discord.message import MessageReference, PartialMessage
+    from discord.poll import Poll
     from discord.state import ConnectionState
+    from discord.sticker import GuildSticker, StickerItem
     from discord.user import ClientUser, User
     from discord.voice_client import VoiceProtocol
 
@@ -307,6 +314,14 @@ class Context(discord.abc.Messageable, Generic[BotT]):
             return None
         return self.command.cog
 
+    @property
+    def filesize_limit(self) -> int:
+        """:class:`int`: Returns the maximum number of bytes files can have when uploaded to this guild or DM channel associated with this context.
+
+        .. versionadded:: 2.1
+        """
+        return self.guild.filesize_limit if self.guild is not None else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
+
     @discord.utils.cached_property
     def guild(self) -> Optional[Guild]:
         """Optional[:class:`.Guild`]: Returns the guild associated with this context's command. None if not available."""
@@ -422,6 +437,91 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         except CommandError as e:
             await cmd.on_help_command_error(self, e)
 
+    @overload
+    async def reply(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        file: _FileBase = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+        poll: Poll = ...,
+    ) -> Message:
+        ...
+
+    @overload
+    async def reply(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        files: Sequence[_FileBase] = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+        poll: Poll = ...,
+    ) -> Message:
+        ...
+
+    @overload
+    async def reply(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        file: _FileBase = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+        poll: Poll = ...,
+    ) -> Message:
+        ...
+
+    @overload
+    async def reply(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        files: Sequence[_FileBase] = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+        poll: Poll = ...,
+    ) -> Message:
+        ...
+
+    @discord.utils.copy_doc(Message.reply)
+    async def reply(self, content: Optional[str] = None, **kwargs: Any) -> Message:
+        return await self.message.reply(content, **kwargs)
+
+    @discord.utils.deprecated("Context.application_commands")
     @discord.utils.copy_doc(Message.message_commands)
     def message_commands(
         self,

@@ -24,12 +24,12 @@ DEALINGS IN THE SOFTWARE.
 
 from __future__ import annotations
 
-from typing import List, Literal, TypedDict
+from typing import List, Literal, Optional, TypedDict
 from typing_extensions import NotRequired
 
 from .billing import PartialPaymentSource
 from .snowflake import Snowflake
-from .store import SKU
+from .store import PublicSKU
 from .subscriptions import PartialSubscription
 
 
@@ -56,6 +56,11 @@ class Payment(PartialPayment):
     downloadable_refund_invoices: NotRequired[List[str]]
     refund_disqualification_reasons: NotRequired[List[str]]
     flags: int
-    sku: NotRequired[SKU]
+    sku: NotRequired[PublicSKU]
     payment_source: NotRequired[PartialPaymentSource]
     subscription: NotRequired[PartialSubscription]
+    metadata: PaymentMetadata
+
+
+class PaymentMetadata(TypedDict):
+    billing_error_code: Optional[int]

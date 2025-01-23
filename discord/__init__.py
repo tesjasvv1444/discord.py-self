@@ -34,16 +34,17 @@ from .colour import *
 from .commands import *
 from .components import *
 from .connections import *
+from .directory import *
 from .embeds import *
 from .emoji import *
 from .entitlements import *
 from .enums import *
 from .errors import *
+from .experiment import *
 from .file import *
 from .flags import *
 from .guild import *
 from .guild_premium import *
-from .handlers import *
 from .integrations import *
 from .interactions import *
 from .invite import *
@@ -59,6 +60,7 @@ from .partial_emoji import *
 from .payments import *
 from .permissions import *
 from .player import *
+from .poll import *
 from .profile import *
 from .promotions import *
 from .raw_models import *

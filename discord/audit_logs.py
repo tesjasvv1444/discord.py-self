@@ -33,7 +33,7 @@ from .invite import Invite
 from .mixins import Hashable
 from .object import Object
 from .permissions import PermissionOverwrite, Permissions
-from .automod import AutoModTrigger, AutoModRuleAction, AutoModPresets, AutoModRule
+from .automod import AutoModTrigger, AutoModRuleAction, AutoModRule
 from .role import Role
 from .emoji import Emoji
 from .partial_emoji import PartialEmoji
@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from .types.audit_log import (
         AuditLogChange as AuditLogChangePayload,
         AuditLogEntry as AuditLogEntryPayload,
+        _AuditLogChange_TriggerMetadata as AuditLogChangeTriggerMetadataPayload,
     )
     from .types.channel import (
         PermissionOverwrite as PermissionOverwritePayload,
@@ -69,12 +70,9 @@ if TYPE_CHECKING:
     from .types.invite import Invite as InvitePayload
     from .types.role import Role as RolePayload
     from .types.snowflake import Snowflake
-    from .types.automod import AutoModerationTriggerMetadata, AutoModerationAction
+    from .types.automod import AutoModerationAction
     from .user import User
-    from .stage_instance import StageInstance
-    from .sticker import GuildSticker
-    from .threads import Thread
-    from .automod import AutoModRule, AutoModTrigger
+    from .webhook import Webhook
 
     TargetType = Union[
         Guild,
@@ -89,6 +87,8 @@ if TYPE_CHECKING:
         Thread,
         Object,
         AutoModRule,
+        ScheduledEvent,
+        Webhook,
         None,
     ]
 
@@ -226,39 +226,6 @@ def _guild_hash_transformer(path: str) -> Callable[[AuditLogEntry, Optional[str]
     return _transform
 
 
-def _transform_automod_trigger_metadata(
-    entry: AuditLogEntry, data: AutoModerationTriggerMetadata
-) -> Optional[AutoModTrigger]:
-
-    if isinstance(entry.target, AutoModRule):
-        # Trigger type cannot be changed, so type should be the same before and after updates.
-        # Avoids checking which keys are in data to guess trigger type
-        # or returning None if data is empty.
-        try:
-            return AutoModTrigger.from_data(type=entry.target.trigger.type.value, data=data)
-        except Exception:
-            pass
-
-    # Try to infer trigger type from available keys in data
-    if 'presets' in data:
-        return AutoModTrigger(
-            type=enums.AutoModRuleTriggerType.keyword_preset,
-            presets=AutoModPresets._from_value(data['presets']),  # type: ignore
-            allow_list=data.get('allow_list'),
-        )
-    elif 'keyword_filter' in data:
-        return AutoModTrigger(
-            type=enums.AutoModRuleTriggerType.keyword,
-            keyword_filter=data['keyword_filter'],  # type: ignore
-            allow_list=data.get('allow_list'),
-            regex_patterns=data.get('regex_patterns'),
-        )
-    elif 'mention_total_limit' in data:
-        return AutoModTrigger(type=enums.AutoModRuleTriggerType.mention_spam, mention_limit=data['mention_total_limit'])  # type: ignore
-    else:
-        return AutoModTrigger(type=enums.AutoModRuleTriggerType.spam)
-
-
 def _transform_automod_actions(entry: AuditLogEntry, data: List[AutoModerationAction]) -> List[AutoModRuleAction]:
     return [AutoModRuleAction.from_data(action) for action in data]
 
@@ -362,7 +329,6 @@ class AuditLogChanges:
         'image_hash':                            ('cover_image', _transform_cover_image),
         'trigger_type':                          (None, _enum_transformer(enums.AutoModRuleTriggerType)),
         'event_type':                            (None, _enum_transformer(enums.AutoModRuleEventType)),
-        'trigger_metadata':                      ('trigger', _transform_automod_trigger_metadata),
         'actions':                               (None, _transform_automod_actions),
         'exempt_channels':                       (None, _transform_channels_or_threads),
         'exempt_roles':                          (None, _transform_roles),
@@ -386,6 +352,21 @@ class AuditLogChanges:
                 continue
             elif attr == '$remove':
                 self._handle_role(self.after, self.before, entry, elem['new_value'])  # type: ignore # new_value is a list of roles in this case
+                continue
+
+            # special case for automod trigger
+            if attr == 'trigger_metadata':
+                # given full metadata dict
+                self._handle_trigger_metadata(entry, elem, data)  # type: ignore  # should be trigger metadata
+                continue
+            elif entry.action is enums.AuditLogAction.automod_rule_update and attr.startswith('$'):
+                # on update, some trigger attributes are keys and formatted as $(add/remove)_{attribute}
+                action, _, trigger_attr = attr.partition('_')
+                # new_value should be a list of added/removed strings for keyword_filter, regex_patterns, or allow_list
+                if action == '$add':
+                    self._handle_trigger_attr_update(self.before, self.after, entry, trigger_attr, elem['new_value'])  # type: ignore
+                elif action == '$remove':
+                    self._handle_trigger_attr_update(self.after, self.before, entry, trigger_attr, elem['new_value'])  # type: ignore
                 continue
 
             try:
@@ -447,6 +428,76 @@ class AuditLogChanges:
             data.append(role)
 
         setattr(second, 'roles', data)
+
+    def _handle_trigger_metadata(
+        self,
+        entry: AuditLogEntry,
+        data: AuditLogChangeTriggerMetadataPayload,
+        full_data: List[AuditLogChangePayload],
+    ):
+        trigger_value: Optional[int] = None
+        trigger_type: Optional[enums.AutoModRuleTriggerType] = None
+
+        # try to get trigger type from before or after
+        trigger_type = getattr(self.before, 'trigger_type', getattr(self.after, 'trigger_type', None))
+
+        if trigger_type is None:
+            if isinstance(entry.target, AutoModRule):
+                # Trigger type cannot be changed, so it should be the same before and after updates.
+                # Avoids checking which keys are in data to guess trigger type
+                trigger_value = entry.target.trigger.type.value
+        else:
+            # found a trigger type from before or after
+            trigger_value = trigger_type.value
+
+        if trigger_value is None:
+            # try to find trigger type in the full list of changes
+            _elem = utils.find(lambda elem: elem['key'] == 'trigger_type', full_data)
+            if _elem is not None:
+                trigger_value = _elem.get('old_value', _elem.get('new_value'))  # type: ignore  # trigger type values should be int
+
+            if trigger_value is None:
+                # try to infer trigger_type from the keys in old or new value
+                combined = (data.get('old_value') or {}).keys() | (data.get('new_value') or {}).keys()
+                if not combined:
+                    trigger_value = enums.AutoModRuleTriggerType.spam.value
+                elif 'presets' in combined:
+                    trigger_value = enums.AutoModRuleTriggerType.keyword_preset.value
+                elif 'keyword_filter' in combined or 'regex_patterns' in combined:
+                    trigger_value = enums.AutoModRuleTriggerType.keyword.value
+                elif 'mention_total_limit' in combined or 'mention_raid_protection_enabled' in combined:
+                    trigger_value = enums.AutoModRuleTriggerType.mention_spam.value
+                else:
+                    # some unknown type
+                    trigger_value = -1
+
+        self.before.trigger = AutoModTrigger.from_data(trigger_value, data.get('old_value'))
+        self.after.trigger = AutoModTrigger.from_data(trigger_value, data.get('new_value'))
+
+    def _handle_trigger_attr_update(
+        self, first: AuditLogDiff, second: AuditLogDiff, entry: AuditLogEntry, attr: str, data: List[str]
+    ):
+        self._create_trigger(first, entry)
+        trigger = self._create_trigger(second, entry)
+        try:
+            # guard unexpecte non list attributes or non iterable data
+            getattr(trigger, attr).extend(data)
+        except (AttributeError, TypeError):
+            pass
+
+    def _create_trigger(self, diff: AuditLogDiff, entry: AuditLogEntry) -> AutoModTrigger:
+        # check if trigger has already been created
+        if not hasattr(diff, 'trigger'):
+            # create a trigger
+            if isinstance(entry.target, AutoModRule):
+                # get trigger type from the automod rule
+                trigger_type = entry.target.trigger.type
+            else:
+                # unknown trigger type
+                trigger_type = enums.try_enum(enums.AutoModRuleTriggerType, -1)
+
+            diff.trigger = AutoModTrigger(type=trigger_type)
+        return diff.trigger
 
 
 class _AuditLogProxy:
@@ -542,6 +593,7 @@ class AuditLogEntry(Hashable):
         *,
         users: Mapping[int, User],
         automod_rules: Mapping[int, AutoModRule],
+        webhooks: Mapping[int, Webhook],
         data: AuditLogEntryPayload,
         guild: Guild,
     ):
@@ -549,6 +601,7 @@ class AuditLogEntry(Hashable):
         self.guild: Guild = guild
         self._users: Mapping[int, User] = users
         self._automod_rules: Mapping[int, AutoModRule] = automod_rules
+        self._webhooks: Mapping[int, Webhook] = webhooks
         self._from_data(data)
 
     def _from_data(self, data: AuditLogEntryPayload) -> None:
@@ -606,7 +659,9 @@ class AuditLogEntry(Hashable):
             ):
                 channel_id = utils._get_as_snowflake(extra, 'channel_id')
                 channel = None
-                if channel_id is not None:
+
+                # May be an empty string instead of None due to a Discord issue
+                if channel_id:
                     channel = self.guild.get_channel_or_thread(channel_id) or Object(id=channel_id)
 
                 self.extra = _AuditLogProxyAutoModAction(
@@ -665,12 +720,11 @@ class AuditLogEntry(Hashable):
         if self.action.target_type is None:
             return None
 
-        if self._target_id is None:
-            return None
-
         try:
             converter = getattr(self, '_convert_target_' + self.action.target_type)
         except AttributeError:
+            if self._target_id is None:
+                return None
             return Object(id=self._target_id)
         else:
             return converter(self._target_id)
@@ -703,7 +757,12 @@ class AuditLogEntry(Hashable):
     def _convert_target_channel(self, target_id: int) -> Union[abc.GuildChannel, Object]:
         return self.guild.get_channel(target_id) or Object(id=target_id)
 
-    def _convert_target_user(self, target_id: int) -> Union[Member, User, Object]:
+    def _convert_target_user(self, target_id: Optional[int]) -> Optional[Union[Member, User, Object]]:
+        # For some reason the member_disconnect and member_move action types
+        # do not have a non-null target_id so safeguard against that
+        if target_id is None:
+            return None
+
         return self._get_member(target_id) or Object(id=target_id, type=Member)
 
     def _convert_target_role(self, target_id: int) -> Union[Role, Object]:
@@ -750,3 +809,8 @@ class AuditLogEntry(Hashable):
 
     def _convert_target_auto_moderation(self, target_id: int) -> Union[AutoModRule, Object]:
         return self._automod_rules.get(target_id) or Object(target_id, type=AutoModRule)
+
+    def _convert_target_webhook(self, target_id: int) -> Union[Webhook, Object]:
+        from .webhook import Webhook  # Circular import
+
+        return self._webhooks.get(target_id) or Object(target_id, type=Webhook)

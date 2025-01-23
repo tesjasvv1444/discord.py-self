@@ -5,9 +5,15 @@ on:
   pull_request:
     types: [ opened, synchronize ]
 
+# Runs do not need to be concurrent
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -33,7 +39,7 @@ jobs:
       - name: Run Pyright
         uses: jakebailey/pyright-action@v1
         with:
-          version: '1.1.289'
+          version: '1.1.316'
           warnings: false
           no-comments: false
 

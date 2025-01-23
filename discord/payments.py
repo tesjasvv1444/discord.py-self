@@ -31,6 +31,8 @@ from .billing import PaymentSource
 from .enums import (
     PaymentGateway,
     PaymentStatus,
+    RefundDisqualificationReason,
+    RefundReason,
     SubscriptionType,
     try_enum,
 )
@@ -117,8 +119,12 @@ class Payment(Hashable):
         The URL to download the VAT invoice for this payment, if available.
     refund_invoices_urls: List[:class:`str`]
         A list of URLs to download VAT credit notices for refunds on this payment, if available.
-    refund_disqualification_reasons: List[:class:`str`]
+    refund_disqualification_reasons: List[:class:`RefundDisqualificationReason`]
         A list of reasons why the payment cannot be refunded, if any.
+    error_code: Optional[:class:`int`]
+        The JSON error code that occurred during the payment, if any.
+
+        .. versionadded:: 2.1
     """
 
     __slots__ = (
@@ -142,6 +148,8 @@ class Payment(Hashable):
         'invoice_url',
         'refund_invoices_urls',
         'refund_disqualification_reasons',
+        'error_code',
+        '_refundable',
         '_flags',
         '_state',
     )
@@ -172,7 +180,10 @@ class Payment(Hashable):
         self.payment_gateway_payment_id: Optional[str] = data.get('payment_gateway_payment_id')
         self.invoice_url: Optional[str] = data.get('downloadable_invoice')
         self.refund_invoices_urls: List[str] = data.get('downloadable_refund_invoices', [])
-        self.refund_disqualification_reasons: List[str] = data.get('premium_refund_disqualification_reasons', [])
+        self.refund_disqualification_reasons: List[RefundDisqualificationReason] = [
+            try_enum(RefundDisqualificationReason, r) for r in data.get('premium_refund_disqualification_reasons', [])
+        ]
+        self._refundable = data.get('premium_refund_disqualification_reasons') == []  # Hack for better DUX
         self._flags: int = data.get('flags', 0)
 
         # The subscription object does not include the payment source ID
@@ -184,6 +195,9 @@ class Payment(Hashable):
         self.subscription: Optional[Subscription] = (
             Subscription(data=data['subscription'], state=state) if 'subscription' in data else None
         )
+
+        metadata = data.get('metadata') or {}
+        self.error_code: Optional[int] = metadata.get('billing_error_code')
 
     def __repr__(self) -> str:
         return f'<Payment id={self.id} amount={self.amount} currency={self.currency} status={self.status}>'
@@ -207,6 +221,13 @@ class Payment(Hashable):
         """:class:`bool`: Whether the payment was made externally."""
         return self.payment_gateway in (PaymentGateway.apple, PaymentGateway.google)
 
+    def is_refundable(self) -> bool:
+        """:class:`bool`: Whether the payment is refundable.
+
+        .. versionadded:: 2.1
+        """
+        return self.status == PaymentStatus.completed and self._refundable
+
     @property
     def flags(self) -> PaymentFlags:
         """:class:`PaymentFlags`: Returns the payment's flags."""
@@ -225,20 +246,25 @@ class Payment(Hashable):
         await self._state.http.void_payment(self.id)
         self.status = PaymentStatus.failed
 
-    async def refund(self, reason: Optional[int] = None) -> None:
+    async def refund(self, reason: RefundReason = RefundReason.other) -> None:
         """|coro|
 
-        Refund the payment.
+        Refund the payment. Refunds can only be made for payments less than 5 days old.
+
+        Parameters
+        ----------
+        reason: :class:`RefundReason`
+            The reason for the refund.
+
+            .. versionadded:: 2.1
 
         Raises
         ------
         HTTPException
             Refunding the payment failed.
         """
-        # reason here is an enum (0-8), but I was unable to find the enum values
-        # Either way, it's optional and this endpoint isn't really used anyway
-        await self._state.http.refund_payment(self.id, reason)
-        self.status = PaymentStatus.refunded
+        data = await self._state.http.refund_payment(self.id, int(reason))
+        self._update(data)
 
 
 class EntitlementPayment(Hashable):

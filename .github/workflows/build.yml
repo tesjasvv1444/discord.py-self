@@ -5,9 +5,15 @@ on:
   pull_request:
     types: [ opened, synchronize ]
 
+# Runs do not need to be concurrent
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
 jobs:
   dists-and-docs:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3

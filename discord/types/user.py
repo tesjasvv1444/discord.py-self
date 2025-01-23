@@ -22,6 +22,8 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
+from __future__ import annotations
+
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 from typing_extensions import NotRequired
 
@@ -34,10 +36,12 @@ class PartialUser(TypedDict):
     username: str
     discriminator: str
     avatar: Optional[str]
-    avatar_decoration: NotRequired[Optional[str]]
+    avatar_decoration_data: NotRequired[Optional[UserAvatarDecorationData]]
     public_flags: NotRequired[int]
     bot: NotRequired[bool]
     system: NotRequired[bool]
+    global_name: Optional[str]
+    premium_type: NotRequired[PremiumType]
 
 
 ConnectionType = Literal[
@@ -89,6 +93,20 @@ class User(APIUser, total=False):
     nsfw_allowed: Optional[bool]
 
 
+class UserAvatarDecorationData(TypedDict):
+    asset: str
+    sku_id: NotRequired[Snowflake]
+    expires_at: Optional[int]
+
+
+class PomeloAttempt(TypedDict):
+    taken: bool
+
+
+class PomeloSuggestion(TypedDict):
+    username: str
+
+
 class PartialConnection(TypedDict):
     id: str
     type: ConnectionType
@@ -127,11 +145,70 @@ class Relationship(TypedDict):
     since: NotRequired[str]
 
 
+ProtoSettingsType = Literal[1, 2, 3]
+
+
 class ProtoSettings(TypedDict):
     settings: str
 
 
-ProtoSettingsType = Literal[1, 2, 3]
+class _ConsentSettings(TypedDict):
+    consented: bool
+
+
+class PartialConsentSettings(TypedDict):
+    personalization: _ConsentSettings
+
+
+class ConsentSettings(PartialConsentSettings):
+    usage_statistics: _ConsentSettings
+
+
+class _EmailSettingsCategories(TypedDict):
+    communication: bool
+    social: bool
+    recommendations_and_events: bool
+    tips: bool
+    updates_and_announcements: bool
+    family_center_digest: bool
+
+
+class EmailSettings(TypedDict):
+    initialized: bool
+    categories: _EmailSettingsCategories
+
+
+MessageNotificationLevel = Literal[0, 1, 2, 3]
+HighlightLevel = Literal[0, 1, 2]
+
+
+class MuteConfig(TypedDict):
+    end_time: Optional[str]
+    selected_time_window: Optional[int]
+
+
+class ChannelOverride(TypedDict):
+    channel_id: Snowflake
+    collapsed: bool
+    message_notifications: MessageNotificationLevel
+    muted: bool
+    mute_config: Optional[MuteConfig]
+
+
+class UserGuildSettings(TypedDict):
+    guild_id: Optional[Snowflake]
+    channel_overrides: List[ChannelOverride]
+    flags: int
+    message_notifications: MessageNotificationLevel
+    notify_highlights: HighlightLevel
+    hide_muted_channels: bool
+    mobile_push: bool
+    muted: bool
+    mute_config: Optional[MuteConfig]
+    mute_scheduled_events: bool
+    suppress_everyone: bool
+    suppress_roles: bool
+    version: int
 
 
 class UserAffinity(TypedDict):
@@ -153,6 +230,15 @@ class GuildAffinities(TypedDict):
     guild_affinities: List[GuildAffinity]
 
 
+class ChannelAffinity(TypedDict):
+    channel_id: Snowflake
+    affinity: float
+
+
+class ChannelAffinities(TypedDict):
+    channel_affinities: List[ChannelAffinity]
+
+
 class Note(TypedDict):
     note: str
     user_id: Snowflake
@@ -160,11 +246,20 @@ class Note(TypedDict):
 
 
 class FriendSuggestionReason(TypedDict):
-    name: Optional[str]
+    name: str
     platform_type: ConnectionType
-    type: int
+    type: Literal[1]
 
 
 class FriendSuggestion(TypedDict):
     suggested_user: PartialUser
     reasons: List[FriendSuggestionReason]
+    from_suggested_user_contacts: NotRequired[bool]
+
+
+class FriendToken(TypedDict):
+    friend_token: str
+
+
+class Report(TypedDict):
+    report_id: Snowflake

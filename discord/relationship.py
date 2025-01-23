@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 
-from .enums import ConnectionType, RelationshipAction, RelationshipType, Status, try_enum
+from .enums import ConnectionType, FriendSuggestionReasonType, RelationshipAction, RelationshipType, Status, try_enum
 from .mixins import Hashable
 from .object import Object
 from .utils import MISSING, parse_time
@@ -336,20 +336,22 @@ class FriendSuggestionReason:
 
     Attributes
     -----------
+    type: :class:`FriendSuggestionReasonType`
+        The type of friend suggestion reason.
     platform: :class:`ConnectionType`
         The platform the user was suggested from.
-    name: Optional[:class:`str`]
+    name: :class:`str`
         The user's name on the platform.
     """
 
     __slots__ = ('type', 'platform', 'name')
 
     def __init__(self, data: FriendSuggestionReasonPayload):
-        # This entire model is mostly unused by any client, so I have no idea what the type is
+        # This entire model is mostly unused by any client, so I can't be sure on types
         # Also because of this, I'm treating everything as optional just in case
-        self.type: int = data.get('type', 0)
+        self.type: FriendSuggestionReasonType = try_enum(FriendSuggestionReasonType, data.get('type', 0))
         self.platform: ConnectionType = try_enum(ConnectionType, data.get('platform'))
-        self.name: Optional[str] = data.get('name')
+        self.name: str = data.get('name') or ''
 
     def __repr__(self) -> str:
         return f'<FriendSuggestionReason platform={self.platform!r} name={self.name!r}>'
@@ -380,30 +382,43 @@ class FriendSuggestion(Hashable):
         The suggested user.
     reasons: List[:class:`FriendSuggestionReason`]
         The reasons why the user was suggested.
+    from_user_contacts: :class:`bool`
+        Whether the suggested user had the current user in their contacts.
     """
 
-    __slots__ = ('user', 'reasons', '_state')
+    __slots__ = ('user', 'reasons', 'from_user_contacts', '_state')
 
     def __init__(self, *, state: ConnectionState, data: FriendSuggestionPayload):
         self._state = state
         self.user = state.store_user(data['suggested_user'])
         self.reasons = [FriendSuggestionReason(r) for r in data.get('reasons', [])]
+        self.from_user_contacts: bool = data.get('from_suggested_user_contacts', False)
 
     def __repr__(self) -> str:
-        return f'<FriendSuggestion user={self.user!r} reasons={self.reasons!r}>'
+        return (
+            f'<FriendSuggestion user={self.user!r} reasons={self.reasons!r} from_user_contacts={self.from_user_contacts!r}>'
+        )
 
-    async def accept(self) -> None:
+    async def accept(self, *, friend_token: str = MISSING) -> None:
         """|coro|
 
         Accepts the friend suggestion.
         This creates a :class:`Relationship` of type :class:`RelationshipType.outgoing_request`.
+
+        Parameters
+        ----------
+        friend_token: :class:`str`
+            The friend token to accept the friend suggestion with.
+            This will bypass the user's friend request settings.
 
         Raises
         -------
         HTTPException
             Accepting the relationship failed.
         """
-        await self._state.http.add_relationship(self.user.id, action=RelationshipAction.friend_suggestion)
+        await self._state.http.add_relationship(
+            self.user.id, friend_token=friend_token or None, action=RelationshipAction.friend_suggestion
+        )
 
     async def delete(self) -> None:
         """|coro|

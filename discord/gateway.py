@@ -21,6 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,9 +31,8 @@ import struct
 import time
 import threading
 import traceback
-import zlib
 
-from typing import Any, Callable, Coroutine, Dict, List, TYPE_CHECKING, NamedTuple, Optional, TypeVar
+from typing import Any, Callable, Coroutine, Dict, List, TYPE_CHECKING, NamedTuple, Optional, Sequence, TypeVar, Tuple
 
 import aiohttp
 import yarl
@@ -61,7 +61,8 @@ if TYPE_CHECKING:
     from .enums import Status
     from .state import ConnectionState
     from .types.snowflake import Snowflake
-    from .voice_client import VoiceClient
+    from .types.gateway import BulkGuildSubscribePayload
+    from .voice_state import VoiceConnectionState
 
 
 class ReconnectWebSocket(Exception):
@@ -238,45 +239,10 @@ class DiscordWebSocket:
 
     Attributes
     -----------
-    DISPATCH
-        Receive only. Denotes an event to be sent to Discord, such as READY.
-    HEARTBEAT
-        When received tells Discord to keep the connection alive.
-        When sent asks if your connection is currently alive.
-    IDENTIFY
-        Send only. Starts a new session.
-    PRESENCE
-        Send only. Updates your presence.
-    VOICE_STATE
-        Send only. Starts a new connection to a voice guild.
-    VOICE_PING
-        Send only. Checks ping time to a voice guild, do not use.
-    RESUME
-        Send only. Resumes an existing connection.
-    RECONNECT
-        Receive only. Tells the client to reconnect to a new gateway.
-    REQUEST_MEMBERS
-        Send only. Asks for the guild members.
-    INVALIDATE_SESSION
-        Receive only. Tells the client to optionally invalidate the session
-        and IDENTIFY again.
-    HELLO
-        Receive only. Tells the client the heartbeat interval.
-    HEARTBEAT_ACK
-        Receive only. Confirms receiving of a heartbeat. Not having it implies
-        a connection issue.
-    GUILD_SYNC
-        Send only. Requests a guild sync. This is unfortunately no longer functional.
-    CALL_CONNECT
-        Send only. Maybe used for calling? Probably just tracking.
-    GUILD_SUBSCRIBE
-        Send only. Subscribes you to guilds/guild members. Might respond with GUILD_MEMBER_LIST_UPDATE.
-    REQUEST_COMMANDS
-        Send only. Requests application commands from a guild. Responds with GUILD_APPLICATION_COMMANDS_UPDATE.
     gateway
         The gateway we are currently connected to.
     token
-        The authentication token for discord.
+        The authentication token for Discord.
     """
 
     if TYPE_CHECKING:
@@ -291,26 +257,28 @@ class DiscordWebSocket:
         _max_heartbeat_timeout: float
         _user_agent: str
         _super_properties: Dict[str, Any]
-        _zlib_enabled: bool
+        _transport_compression: bool
 
     # fmt: off
-    DEFAULT_GATEWAY    = yarl.URL('wss://gateway.discord.gg/')
-    DISPATCH           = 0
-    HEARTBEAT          = 1
-    IDENTIFY           = 2
-    PRESENCE           = 3
-    VOICE_STATE        = 4
-    VOICE_PING         = 5
-    RESUME             = 6
-    RECONNECT          = 7
-    REQUEST_MEMBERS    = 8
-    INVALIDATE_SESSION = 9
-    HELLO              = 10
-    HEARTBEAT_ACK      = 11
-    GUILD_SYNC         = 12  # :(
-    CALL_CONNECT       = 13
-    GUILD_SUBSCRIBE    = 14
-    REQUEST_COMMANDS   = 24
+    DEFAULT_GATEWAY       = yarl.URL('wss://gateway.discord.gg/')
+    DISPATCH              = 0
+    HEARTBEAT             = 1
+    IDENTIFY              = 2
+    PRESENCE              = 3
+    VOICE_STATE           = 4
+    VOICE_PING            = 5
+    RESUME                = 6
+    RECONNECT             = 7
+    REQUEST_MEMBERS       = 8
+    INVALIDATE_SESSION    = 9
+    HELLO                 = 10
+    HEARTBEAT_ACK         = 11
+    # GUILD_SYNC          = 12
+    CALL_CONNECT          = 13
+    GUILD_SUBSCRIBE       = 14  # Deprecated
+    # REQUEST_COMMANDS    = 24
+    SEARCH_RECENT_MEMBERS = 35
+    BULK_GUILD_SUBSCRIBE  = 37
     # fmt: on
 
     def __init__(self, socket: aiohttp.ClientWebSocketResponse, *, loop: asyncio.AbstractEventLoop) -> None:
@@ -325,13 +293,16 @@ class DiscordWebSocket:
         self._keep_alive: Optional[KeepAliveHandler] = None
         self.thread_id: int = threading.get_ident()
 
-        # ws related stuff
+        # WS related stuff
         self.session_id: Optional[str] = None
         self.sequence: Optional[int] = None
-        self._zlib: zlib._Decompress = zlib.decompressobj()
-        self._buffer: bytearray = bytearray()
+        self._decompressor: utils._DecompressionContext = utils._ActiveDecompressionContext()
         self._close_code: Optional[int] = None
         self._rate_limiter: GatewayRatelimiter = GatewayRatelimiter()
+
+        # Presence state tracking
+        self.afk: bool = False
+        self.idle_since: int = 0
 
     @property
     def open(self) -> bool:
@@ -361,7 +332,7 @@ class DiscordWebSocket:
         sequence: Optional[int] = None,
         resume: bool = False,
         encoding: str = 'json',
-        zlib: bool = True,
+        compress: bool = True,
     ) -> Self:
         """Creates a main websocket for Discord from a :class:`Client`.
 
@@ -372,10 +343,12 @@ class DiscordWebSocket:
 
         gateway = gateway or cls.DEFAULT_GATEWAY
 
-        if zlib:
-            url = gateway.with_query(v=INTERNAL_API_VERSION, encoding=encoding, compress='zlib-stream')
-        else:
+        if not compress:
             url = gateway.with_query(v=INTERNAL_API_VERSION, encoding=encoding)
+        else:
+            url = gateway.with_query(
+                v=INTERNAL_API_VERSION, encoding=encoding, compress=utils._ActiveDecompressionContext.COMPRESSION_TYPE
+            )
 
         socket = await client.http.ws_connect(str(url))
         ws = cls(socket, loop=client.loop)
@@ -393,7 +366,9 @@ class DiscordWebSocket:
         ws._max_heartbeat_timeout = client._connection.heartbeat_timeout
         ws._user_agent = client.http.user_agent
         ws._super_properties = client.http.super_properties
-        ws._zlib_enabled = zlib
+        ws._transport_compression = compress
+        ws.afk = client._connection._afk
+        ws.idle_since = client._connection._idle_since
 
         if client._enable_debug_events:
             ws.send = ws.debug_send
@@ -455,15 +430,13 @@ class DiscordWebSocket:
         # but that needs more testing...
         presence = {
             'status': 'unknown',
-            'since': 0,
+            'since': self.idle_since,
             'activities': [],
-            'afk': False,
+            'afk': self.afk,
         }
         existing = self._connection.current_session
         if existing is not None:
             presence['status'] = str(existing.status) if existing.status is not Status.offline else 'invisible'
-            if existing.status == Status.idle:
-                presence['since'] = int(time.time() * 1000)
             presence['activities'] = [a.to_dict() for a in existing.activities]
         # else:
         #     presence['status'] = self._connection._status or 'unknown'
@@ -477,15 +450,16 @@ class DiscordWebSocket:
                 'capabilities': self.capabilities.value,
                 'properties': self._super_properties,
                 'presence': presence,
-                'compress': not self._zlib_enabled,  # We require at least one form of compression
+                'compress': not self._transport_compression,  # We require at least one form of compression
                 'client_state': {
                     'api_code_version': 0,
                     'guild_versions': {},
-                    'highest_last_message_id': '0',
-                    'private_channels_version': '0',
-                    'read_state_version': 0,
-                    'user_guild_settings_version': -1,
-                    'user_settings_version': -1,
+                    # 'highest_last_message_id': '0',
+                    # 'initial_guild_id': None,
+                    # 'private_channels_version': '0',
+                    # 'read_state_version': 0,
+                    # 'user_guild_settings_version': -1,
+                    # 'user_settings_version': -1,
                 },
             },
         }
@@ -510,13 +484,11 @@ class DiscordWebSocket:
 
     async def received_message(self, msg: Any, /) -> None:
         if type(msg) is bytes:
-            self._buffer.extend(msg)
+            msg = self._decompressor.decompress(msg)
 
-            if len(msg) < 4 or msg[-4:] != b'\x00\x00\xff\xff':
+            # Received a partial gateway message
+            if msg is None:
                 return
-            msg = self._zlib.decompress(self._buffer)
-            msg = msg.decode('utf-8')
-            self._buffer = bytearray()
 
         self.log_receive(msg)
         msg = utils._from_json(msg)
@@ -571,6 +543,7 @@ class DiscordWebSocket:
                 self.sequence = None
                 self.session_id = None
                 self.gateway = self.DEFAULT_GATEWAY
+
                 _log.info('Gateway session has been invalidated.')
                 await self.close(code=1000)
                 raise ReconnectWebSocket(resume=False)
@@ -583,6 +556,7 @@ class DiscordWebSocket:
             self.sequence = msg['s']
             self.session_id = data['session_id']
             self.gateway = yarl.URL(data['resume_gateway_url'])
+
             _log.info('Connected to Gateway (Session ID: %s).', self.session_id)
             await self.voice_state()  # Initial OP 4
 
@@ -630,7 +604,10 @@ class DiscordWebSocket:
 
     def _can_handle_close(self) -> bool:
         code = self._close_code or self.socket.close_code
-        return code not in (1000, 4004, 4010, 4011, 4012, 4013, 4014)
+        # If the socket is closed remotely with 1000 and it's not our own explicit close
+        # then it's an improper close that should be handled and reconnected
+        is_improper_close = self._close_code is None and self.socket.close_code == 1000
+        return is_improper_close or code not in (1000, 4004, 4010, 4011, 4012, 4013, 4014)
 
     async def poll_event(self) -> None:
         """Polls for a DISPATCH event and handles the general gateway loop.
@@ -697,7 +674,7 @@ class DiscordWebSocket:
     async def change_presence(
         self,
         *,
-        activities: Optional[List[ActivityTypes]] = None,
+        activities: Optional[Sequence[ActivityTypes]] = None,
         status: Optional[Status] = None,
         since: int = 0,
         afk: bool = False,
@@ -709,19 +686,17 @@ class DiscordWebSocket:
         else:
             activities_data = []
 
-        if status == 'idle':
-            since = int(time.time() * 1000)
-
         payload = {
             'op': self.PRESENCE,
-            'd': {'activities': activities_data, 'afk': afk, 'since': since, 'status': str(status or 'online')},
+            'd': {'activities': activities_data, 'afk': afk, 'since': since, 'status': str(status or 'unknown')},
         }
 
-        sent = utils._to_json(payload)
-        _log.debug('Sending "%s" to change presence.', sent)
-        await self.send(sent)
+        _log.debug('Sending %s to change presence.', payload['d'])
+        await self.send_as_json(payload)
+        self.afk = afk
+        self.idle_since = since
 
-    async def request_lazy_guild(
+    async def guild_subscribe(
         self,
         guild_id: Snowflake,
         *,
@@ -754,6 +729,17 @@ class DiscordWebSocket:
             data['thread_member_lists'] = thread_member_lists
 
         _log.debug('Subscribing to guild %s with payload %s', guild_id, payload['d'])
+        await self.send_as_json(payload)
+
+    async def bulk_guild_subscribe(self, subscriptions: BulkGuildSubscribePayload) -> None:
+        payload = {
+            'op': self.BULK_GUILD_SUBSCRIBE,
+            'd': {
+                'subscriptions': subscriptions,
+            },
+        }
+
+        _log.debug('Subscribing to guilds with payload %s', payload['d'])
         await self.send_as_json(payload)
 
     async def request_chunks(
@@ -789,8 +775,6 @@ class DiscordWebSocket:
         self_mute: bool = False,
         self_deaf: bool = False,
         self_video: bool = False,
-        *,
-        preferred_region: Optional[str] = None,
     ) -> None:
         payload = {
             'op': self.VOICE_STATE,
@@ -803,8 +787,8 @@ class DiscordWebSocket:
             },
         }
 
-        if preferred_region is not None:
-            payload['d']['preferred_region'] = preferred_region
+        if channel_id:
+            payload['d'].update(self._connection._get_preferred_regions())
 
         _log.debug('Updating %s voice state to %s.', guild_id or 'client', payload)
         await self.send_as_json(payload)
@@ -815,41 +799,19 @@ class DiscordWebSocket:
         _log.debug('Requesting call connect for channel %s.', channel_id)
         await self.send_as_json(payload)
 
-    async def request_commands(
-        self,
-        guild_id: Snowflake,
-        type: int,
-        *,
-        nonce: Optional[str] = None,
-        limit: Optional[int] = None,
-        applications: Optional[bool] = None,
-        offset: int = 0,
-        query: Optional[str] = None,
-        command_ids: Optional[List[Snowflake]] = None,
-        application_id: Optional[Snowflake] = None,
+    async def search_recent_members(
+        self, guild_id: Snowflake, query: str = '', *, after: Optional[Snowflake] = None, nonce: Optional[str] = None
     ) -> None:
         payload = {
-            'op': self.REQUEST_COMMANDS,
+            'op': self.SEARCH_RECENT_MEMBERS,
             'd': {
                 'guild_id': str(guild_id),
-                'type': type,
+                'query': query,
+                'continuation_token': str(after) if after else None,
             },
         }
-
         if nonce is not None:
             payload['d']['nonce'] = nonce
-        if applications is not None:
-            payload['d']['applications'] = applications
-        if limit is not None and limit != 25:
-            payload['d']['limit'] = limit
-        if offset:
-            payload['d']['offset'] = offset
-        if query is not None:
-            payload['d']['query'] = query
-        if command_ids is not None:
-            payload['d']['command_ids'] = command_ids
-        if application_id is not None:
-            payload['d']['application_id'] = str(application_id)
 
         await self.send_as_json(payload)
 
@@ -898,7 +860,7 @@ class DiscordVoiceWebSocket:
 
     if TYPE_CHECKING:
         thread_id: int
-        _connection: VoiceClient
+        _connection: VoiceConnectionState
         gateway: str
         _max_heartbeat_timeout: float
 
@@ -928,7 +890,7 @@ class DiscordVoiceWebSocket:
         self.loop: asyncio.AbstractEventLoop = loop
         self._keep_alive: Optional[VoiceKeepAliveHandler] = None
         self._close_code: Optional[int] = None
-        self.secret_key: Optional[str] = None
+        self.secret_key: Optional[List[int]] = None
         if hook:
             self._hook = hook
 
@@ -967,16 +929,21 @@ class DiscordVoiceWebSocket:
         await self.send_as_json(payload)
 
     @classmethod
-    async def from_client(
-        cls, client: VoiceClient, *, resume: bool = False, hook: Optional[Callable[..., Coroutine[Any, Any, Any]]] = None
+    async def from_connection_state(
+        cls,
+        state: VoiceConnectionState,
+        *,
+        resume: bool = False,
+        hook: Optional[Callable[..., Coroutine[Any, Any, Any]]] = None,
     ) -> Self:
         """Creates a voice websocket for the :class:`VoiceClient`."""
-        gateway = 'wss://' + client.endpoint + '/?v=4'
+        gateway = f'wss://{state.endpoint}/?v=4'
+        client = state.voice_client
         http = client._state.http
         socket = await http.ws_connect(gateway, compress=15)
         ws = cls(socket, loop=client.loop, hook=hook)
         ws.gateway = gateway
-        ws._connection = client
+        ws._connection = state
         ws._max_heartbeat_timeout = 60.0
         ws.thread_id = threading.get_ident()
 
@@ -1052,29 +1019,48 @@ class DiscordVoiceWebSocket:
         state.voice_port = data['port']
         state.endpoint_ip = data['ip']
 
-        packet = bytearray(74)
-        struct.pack_into('>H', packet, 0, 1)  # 1 = Send
-        struct.pack_into('>H', packet, 2, 70)  # 70 = Length
-        struct.pack_into('>I', packet, 4, state.ssrc)
-        state.socket.sendto(packet, (state.endpoint_ip, state.voice_port))
-        recv = await self.loop.sock_recv(state.socket, 74)
-        _log.debug('Received packet in initial_connection: %s.', recv)
+        _log.debug('Connecting to voice socket...')
+        await self.loop.sock_connect(state.socket, (state.endpoint_ip, state.voice_port))
 
-        # The IP is ASCII starting at the 8th byte and ending at the first null
-        ip_start = 8
-        ip_end = recv.index(0, ip_start)
-        state.ip = recv[ip_start:ip_end].decode('ascii')
-
-        state.port = struct.unpack_from('>H', recv, len(recv) - 2)[0]
-        _log.debug('Detected ip: %s, port: %s.', state.ip, state.port)
-
-        # There *should* always be at least one supported mode (xsalsa20_poly1305)
+        state.ip, state.port = await self.discover_ip()
         modes = [mode for mode in data['modes'] if mode in self._connection.supported_modes]
-        _log.debug('Received supported encryption modes: %s.', ", ".join(modes))
+        _log.debug('Received supported encryption modes: %s.', ', '.join(modes))
 
         mode = modes[0]
         await self.select_protocol(state.ip, state.port, mode)
         _log.debug('Selected the voice protocol for use: %s.', mode)
+
+    async def discover_ip(self) -> Tuple[str, int]:
+        state = self._connection
+        packet = bytearray(74)
+        struct.pack_into('>H', packet, 0, 1)  # 1 = Send
+        struct.pack_into('>H', packet, 2, 70)  # 70 = Length
+        struct.pack_into('>I', packet, 4, state.ssrc)
+
+        _log.debug('Sending IP discovery packet...')
+        await self.loop.sock_sendall(state.socket, packet)
+
+        fut: asyncio.Future[bytes] = self.loop.create_future()
+
+        def get_ip_packet(data: bytes):
+            if data[1] == 0x02 and len(data) == 74:
+                self.loop.call_soon_threadsafe(fut.set_result, data)
+
+        fut.add_done_callback(lambda f: state.remove_socket_listener(get_ip_packet))
+        state.add_socket_listener(get_ip_packet)
+        recv = await fut
+
+        _log.debug('Received IP discovery packet: %s.', recv)
+
+        # The IP is ascii starting at the 8th byte and ending at the first null
+        ip_start = 8
+        ip_end = recv.index(0, ip_start)
+        ip = recv[ip_start:ip_end].decode('ascii')
+
+        port = struct.unpack_from('>H', recv, len(recv) - 2)[0]
+        _log.debug('Detected IP: %s, port: %s.', ip, port)
+
+        return ip, port
 
     @property
     def latency(self) -> float:
@@ -1095,10 +1081,9 @@ class DiscordVoiceWebSocket:
         _log.debug('Received secret key for voice connection.')
         self.secret_key = self._connection.secret_key = data['secret_key']
 
-        # Send a speak command with the "not speaking" state.
-        # This also tells Discord our SSRC value, which Discord requires
-        # before sending any voice data (and is the real reason why we
-        # call this here).
+        # Send a speak command with the "not speaking" state
+        # This also tells Discord our SSRC value, which Discord requires before
+        # sending any voice data (and is the real reason why we call this here)
         await self.speak(SpeakingState.none)
 
     async def poll_event(self) -> None:

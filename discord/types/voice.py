@@ -29,10 +29,18 @@ from .snowflake import Snowflake
 from .member import MemberWithUser
 
 
-SupportedModes = Literal['xsalsa20_poly1305_lite', 'xsalsa20_poly1305_suffix', 'xsalsa20_poly1305']
+TransportEncryptionModes = Literal[
+    'aead_aes256_gcm_rtpsize',
+    'aead_xchacha20_poly1305_rtpsize',
+    'xsalsa20_poly1305_lite_rtpsize',
+    'aead_aes256_gcm',
+    'xsalsa20_poly1305',
+    'xsalsa20_poly1305_suffix',
+    'xsalsa20_poly1305_lite',
+]
 
 
-class _VoiceState(TypedDict):
+class BaseVoiceState(TypedDict):
     user_id: Snowflake
     session_id: str
     deaf: bool
@@ -45,13 +53,16 @@ class _VoiceState(TypedDict):
     self_stream: NotRequired[bool]
 
 
-class GuildVoiceState(_VoiceState):
+class VoiceState(BaseVoiceState):
     channel_id: Snowflake
 
 
-class VoiceState(_VoiceState, total=False):
-    channel_id: NotRequired[Optional[Snowflake]]
-    guild_id: NotRequired[Optional[Snowflake]]
+class PrivateVoiceState(BaseVoiceState):
+    channel_id: Optional[Snowflake]
+
+
+class GuildVoiceState(PrivateVoiceState):
+    guild_id: Snowflake
 
 
 class VoiceRegion(TypedDict):
@@ -65,7 +76,7 @@ class VoiceRegion(TypedDict):
 
 class VoiceServerUpdate(TypedDict):
     token: str
-    guild_id: Snowflake
+    guild_id: Optional[Snowflake]
     channel_id: Snowflake
     endpoint: Optional[str]
 
@@ -81,5 +92,5 @@ class VoiceReady(TypedDict):
     ssrc: int
     ip: str
     port: int
-    modes: List[SupportedModes]
+    modes: List[TransportEncryptionModes]
     heartbeat_interval: int

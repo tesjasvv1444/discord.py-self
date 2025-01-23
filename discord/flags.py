@@ -25,7 +25,22 @@ DEALINGS IN THE SOFTWARE.
 from __future__ import annotations
 
 from functools import reduce
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, Iterator, List, Optional, Tuple, Type, TypeVar, overload
+from operator import or_
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+    TypeVar,
+    overload,
+)
 
 from .enums import UserFlags
 
@@ -51,12 +66,17 @@ __all__ = (
     'GiftFlags',
     'LibraryApplicationFlags',
     'ApplicationDiscoveryFlags',
+    'OverlayMethodFlags',
     'FriendSourceFlags',
     'FriendDiscoveryFlags',
     'HubProgressFlags',
     'OnboardingProgressFlags',
     'AutoModPresets',
     'MemberFlags',
+    'ReadStateFlags',
+    'InviteFlags',
+    'AttachmentFlags',
+    'RoleFlags',
 )
 
 BF = TypeVar('BF', bound='BaseFlags')
@@ -129,7 +149,7 @@ class BaseFlags:
             setattr(self, key, value)
 
     @classmethod
-    def _from_value(cls, value):
+    def _from_value(cls, value: int) -> Self:
         self = cls.__new__(cls)
         self.value = value
         return self
@@ -197,9 +217,17 @@ class BaseFlags:
 
 class ArrayFlags(BaseFlags):
     @classmethod
-    def _from_value(cls: Type[Self], value: List[int]) -> Self:
+    def _from_value(cls: Type[Self], value: Sequence[int]) -> Self:
         self = cls.__new__(cls)
-        self.value = reduce(lambda a, b: a | (1 << b - 1), value, 0)
+        # This is a micro-optimization given the frequency this object can be created.
+        # (1).__lshift__ is used in place of lambda x: 1 << x
+        # prebinding to a method of a constant rather than define a lambda.
+        # Pairing this with map, is essentially equivalent to (1 << x for x in value)
+        # reduction using operator.or_ instead of defining a lambda each call
+        # Discord sends these starting with a value of 1
+        # Rather than subtract 1 from each element prior to left shift,
+        # we shift right by 1 once at the end.
+        self.value = reduce(or_, map((1).__lshift__, value), 0) >> 1
         return self
 
     def to_array(self) -> List[int]:
@@ -252,6 +280,9 @@ class Capabilities(BaseFlags):
 
                Returns an iterator of ``(name, value)`` pairs. This allows it
                to be, for example, constructed as a dict or a list of pairs.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -272,7 +303,20 @@ class Capabilities(BaseFlags):
     @classmethod
     def default(cls: Type[Self]) -> Self:
         """Returns a :class:`Capabilities` with the current value used by the library."""
-        return cls._from_value(8189)
+        return cls(
+            lazy_user_notes=True,
+            versioned_read_states=True,
+            versioned_user_guild_settings=True,
+            dedupe_user_objects=True,
+            prioritized_ready_payload=True,
+            multiple_guild_experiment_populations=True,
+            non_channel_read_states=True,
+            auth_token_refresh=True,
+            user_settings_proto=True,
+            client_state_v2=True,
+            auto_call_connect=True,
+            passive_guild_update_v2=True,
+        )
 
     @flag_value
     def lazy_user_notes(self):
@@ -336,9 +380,20 @@ class Capabilities(BaseFlags):
         return 1 << 11
 
     @flag_value
-    def unknown_12(self):
-        """:class:`bool`: Unknown."""
+    def auto_call_connect(self):
+        """:class:`bool`: Connect user to all existing calls on connect (deprecates ``CALL_CONNECT`` opcode)."""
         return 1 << 12
+
+    @flag_value
+    def debounce_message_reactions(self):
+        """:class:`bool`: Debounce message reactions (dispatches ``MESSAGE_REACTION_ADD_MANY`` instead of ``MESSAGE_REACTION_ADD`` when a lot of reactions are sent in quick succession)."""
+        # Debounced reactions don't have member information, so this is kinda undesirable :(
+        return 1 << 13
+
+    @flag_value
+    def passive_guild_update_v2(self):
+        """:class:`bool`: Enable passive guild update v2 (replace ``PASSIVE_UPDATE_V1`` with ``PASSIVE_UPDATE_V2``, a similar event that includes a ``removed_voice_states`` array and a ``members`` array that includes the updated members as well)."""
+        return 1 << 14
 
 
 @fill_with_flags(inverted=True)
@@ -390,6 +445,11 @@ class SystemChannelFlags(BaseFlags):
 
                Returns an iterator of ``(name, value)`` pairs. This allows it
                to be, for example, constructed as a dict or a list of pairs.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
+
+            .. versionadded:: 2.0
 
     Attributes
     -----------
@@ -507,6 +567,11 @@ class MessageFlags(BaseFlags):
 
                Returns an iterator of ``(name, value)`` pairs. This allows it
                to be, for example, constructed as a dict or a list of pairs.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
+
+            .. versionadded:: 2.0
 
     .. versionadded:: 1.3
 
@@ -608,12 +673,20 @@ class MessageFlags(BaseFlags):
         return 4096
 
     @flag_value
-    def is_voice_message(self):
-        """:class:`bool`: Returns ``True`` if the message's audio attachments are rendered as voice messages.
+    def voice(self):
+        """:class:`bool`: Returns ``True`` if the message is a voice message.
 
-        .. versionadded:: 2.0
+        .. versionadded:: 2.1
         """
         return 8192
+
+    @flag_value
+    def forwarded(self):
+        """:class:`bool`: Returns ``True`` if the message is a forwarded message.
+
+        .. versionadded:: 2.1
+        """
+        return 16384
 
 
 @fill_with_flags()
@@ -659,6 +732,11 @@ class PublicUserFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
+
+            .. versionadded:: 2.0
 
     .. versionadded:: 1.4
 
@@ -826,11 +904,15 @@ class PrivateUserFlags(PublicUserFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases or inherited flags are not shown.
+        .. describe:: bool(b)
 
-    .. versionadded:: 2.0
+            Returns whether any flag is set to ``True``.
 
     .. note::
+
         These are only available on your own user flags.
+
+    .. versionadded:: 2.0
 
     Attributes
     -----------
@@ -913,6 +995,9 @@ class PremiumUsageFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -977,6 +1062,9 @@ class PurchasedFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -1065,6 +1153,11 @@ class MemberCacheFlags(BaseFlags):
 
                Returns an iterator of ``(name, value)`` pairs. This allows it
                to be, for example, constructed as a dict or a list of pairs.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
+
+            .. versionadded:: 2.0
 
     Attributes
     -----------
@@ -1112,23 +1205,17 @@ class MemberCacheFlags(BaseFlags):
         return 1
 
     @flag_value
-    def other(self):
-        """:class:`bool`: Whether to cache members that are collected from other means.
+    def joined(self):
+        """:class:`bool`: Whether to cache members that joined the guild
+        or are chunked as part of the initial log in flow.
 
-        This does not apply to members explicitly cached (e.g. :attr:`Guild.chunk`, :attr:`Guild.fetch_members`).
-
-        There is an alias for this called :attr:`joined`.
+        Members that leave the guild are no longer cached.
         """
         return 2
 
     @alias_flag_value
-    def joined(self):
-        """:class:`bool`: Whether to cache members that are collected from other means.
-
-        This does not apply to members explicitly cached (e.g. :attr:`Guild.chunk`, :attr:`Guild.fetch_members`).
-
-        This is an alias for :attr:`other`.
-        """
+    def other(self):
+        """:class:`bool`: Alias for :attr:`joined`."""
         return 2
 
     @property
@@ -1171,8 +1258,15 @@ class ApplicationFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
+
+    .. versionchanged:: 2.1
+
+        Removed now-defunct flag values.
 
     Attributes
     -----------
@@ -1182,11 +1276,6 @@ class ApplicationFlags(BaseFlags):
     """
 
     __slots__ = ()
-
-    @flag_value
-    def embedded_released(self):
-        """:class:`bool`: Returns ``True`` if the embedded application is released to the public."""
-        return 1 << 1
 
     @flag_value
     def managed_emoji(self):
@@ -1204,11 +1293,6 @@ class ApplicationFlags(BaseFlags):
         return 1 << 4
 
     @flag_value
-    def rpc_private_beta(self):
-        """:class:`bool`: Returns ``True`` if the application has the ability to access the client RPC server."""
-        return 1 << 5
-
-    @flag_value
     def automod_badge(self):
         """:class:`bool`: Returns ``True`` if the application has created at least 100 automod rules across all guilds.
 
@@ -1217,24 +1301,20 @@ class ApplicationFlags(BaseFlags):
         return 1 << 6
 
     @flag_value
-    def allow_assets(self):
-        """:class:`bool`: Returns ``True`` if the application has the ability to use activity assets."""
+    def game_profile_disabled(self):
+        """:class:`bool`: Returns ``True`` if the application has its game profile page disabled.
+
+        .. versionadded:: 2.1
+        """
+        return 1 << 7
+
+    @flag_value
+    def public_oauth2_client(self):
+        """:class:`bool`: Returns ``True`` if the application's OAuth2 credentials are public.
+
+        .. versionadded:: 2.1
+        """
         return 1 << 8
-
-    @flag_value
-    def allow_activity_action_spectate(self):
-        """:class:`bool`: Returns ``True`` if the application has the ability to enable spectating activities."""
-        return 1 << 9
-
-    @flag_value
-    def allow_activity_action_join_request(self):
-        """:class:`bool`: Returns ``True`` if the application has the ability to enable activity join requests."""
-        return 1 << 10
-
-    @flag_value
-    def rpc_has_connected(self):
-        """:class:`bool`: Returns ``True`` if the application has accessed the client RPC server before."""
-        return 1 << 11
 
     @flag_value
     def gateway_presence(self):
@@ -1305,6 +1385,26 @@ class ApplicationFlags(BaseFlags):
         """
         return 1 << 24
 
+    @flag_value
+    def iframe_modal(self):
+        """:class:`bool`: Returns ``True`` if the application can use iframes within modals."""
+        return 1 << 26
+
+    @flag_value
+    def social_layer_integration(self):
+        """:class:`bool`: Returns ``True`` if the application can use the social layer SDK."""
+        return 1 << 27
+
+    @flag_value
+    def promoted(self):
+        """:class:`bool`: Returns ``True`` if the application is promoted by Discord."""
+        return 1 << 29
+
+    @flag_value
+    def partner(self):
+        """:class:`bool`: Returns ``True`` if the application is a Discord partner."""
+        return 1 << 30
+
 
 @fill_with_flags()
 class ChannelFlags(BaseFlags):
@@ -1338,6 +1438,9 @@ class ChannelFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -1359,6 +1462,15 @@ class ChannelFlags(BaseFlags):
     def require_tag(self):
         """:class:`bool`: Returns ``True`` if a tag is required to be specified when creating a thread in a :class:`ForumChannel`."""
         return 1 << 4
+
+    @flag_value
+    def hide_media_download_options(self):
+        """:class:`bool`: Returns ``True`` if the client hides embedded media download options in a :class:`ForumChannel`.
+        Only available in media channels.
+
+        .. versionadded:: 2.1
+        """
+        return 1 << 15
 
 
 @fill_with_flags()
@@ -1396,6 +1508,9 @@ class PaymentSourceFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -1454,6 +1569,9 @@ class SKUFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -1514,6 +1632,23 @@ class SKUFlags(BaseFlags):
         """:class:`bool`: Returns ``True`` if the SKU is a application subscription. These are subscriptions made to applications for premium perks bound to a user."""
         return 1 << 8
 
+    @flag_value
+    def creator_monetization(self):
+        """:class:`bool`: Returns ``True`` if the SKU is a creator monetization product (e.g. guild role subscription, guild product).
+
+        .. versionadded:: 2.1
+        """
+        # For some reason this is only actually present on products...
+        return 1 << 9
+
+    @flag_value
+    def guild_product(self):
+        """:class:`bool`: Returns ``True`` if the SKU is a guild product. These are one-time purchases made by guilds for premium perks.
+
+        .. versionadded:: 2.1
+        """
+        return 1 << 10
+
 
 @fill_with_flags()
 class PaymentFlags(BaseFlags):
@@ -1550,6 +1685,9 @@ class PaymentFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -1567,6 +1705,13 @@ class PaymentFlags(BaseFlags):
     def gift(self):
         """:class:`bool`: Returns ``True`` if the payment is for a gift."""
         return 1 << 0
+
+    # TODO: Assumption
+
+    @flag_value
+    def user_refunded(self):
+        """:class:`bool`: Returns ``True`` if the payment has been self-refunded"""
+        return 1 << 2
 
     @flag_value
     def preorder(self):
@@ -1620,6 +1765,9 @@ class PromotionFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -1703,6 +1851,9 @@ class GiftFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -1774,6 +1925,9 @@ class LibraryApplicationFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -1821,25 +1975,25 @@ class ApplicationDiscoveryFlags(BaseFlags):
 
         .. describe:: x == y
 
-            Checks if two LibraryApplicationFlags are equal.
+            Checks if two ApplicationDiscoveryFlags are equal.
         .. describe:: x != y
 
-            Checks if two LibraryApplicationFlags are not equal.
+            Checks if two ApplicationDiscoveryFlags are not equal.
         .. describe:: x | y, x |= y
 
-            Returns a LibraryApplicationFlags instance with all enabled flags from
+            Returns a ApplicationDiscoveryFlags instance with all enabled flags from
             both x and y.
         .. describe:: x & y, x &= y
 
-            Returns a LibraryApplicationFlags instance with only flags enabled on
+            Returns a ApplicationDiscoveryFlags instance with only flags enabled on
             both x and y.
         .. describe:: x ^ y, x ^= y
 
-            Returns a LibraryApplicationFlags instance with only flags enabled on
+            Returns a ApplicationDiscoveryFlags instance with only flags enabled on
             only one of x or y, not on both.
         .. describe:: ~x
 
-            Returns a LibraryApplicationFlags instance with all flags inverted from x.
+            Returns a ApplicationDiscoveryFlags instance with all flags inverted from x.
         .. describe:: hash(x)
 
             Return the flag's hash.
@@ -1848,6 +2002,9 @@ class ApplicationDiscoveryFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -1941,10 +2098,62 @@ class ApplicationDiscoveryFlags(BaseFlags):
         """:class:`bool`: Returns ``True`` if the application's role connections metadata is safe for work."""
         return 1 << 15
 
+
+@fill_with_flags()
+class OverlayMethodFlags(BaseFlags):
+    r"""Wraps up the Discord application overlay method flags.
+
+    .. container:: operations
+
+        .. describe:: x == y
+
+            Checks if two OverlayMethodFlags are equal.
+        .. describe:: x != y
+
+            Checks if two OverlayMethodFlags are not equal.
+        .. describe:: x | y, x |= y
+
+            Returns a OverlayMethodFlags instance with all enabled flags from
+            both x and y.
+        .. describe:: x & y, x &= y
+
+            Returns a OverlayMethodFlags instance with only flags enabled on
+            both x and y.
+        .. describe:: x ^ y, x ^= y
+
+            Returns a OverlayMethodFlags instance with only flags enabled on
+            only one of x or y, not on both.
+        .. describe:: ~x
+
+            Returns a OverlayMethodFlags instance with all flags inverted from x.
+        .. describe:: hash(x)
+
+            Return the flag's hash.
+        .. describe:: iter(x)
+
+            Returns an iterator of ``(name, value)`` pairs. This allows it
+            to be, for example, constructed as a dict or a list of pairs.
+            Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
+
+    .. versionadded:: 2.1
+
+    Attributes
+    -----------
+    value: :class:`int`
+        The raw value. This value is a bit array field of a 53-bit integer
+        representing the currently available flags. You should query
+        flags via the properties rather than using this raw value.
+    """
+
+    __slots__ = ()
+
     @flag_value
-    def eligible(self):
-        """:class:`bool`: Returns ``True`` if the application has met all the above criteria and is eligible for discovery."""
-        return 1 << 16
+    def out_of_process(self):
+        """:class:`bool`: Returns ``True`` if the overlay can be rendered out of process for this application."""
+        return 1 << 0
 
 
 @fill_with_flags()
@@ -1984,6 +2193,9 @@ class FriendSourceFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -2081,6 +2293,9 @@ class FriendDiscoveryFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -2155,6 +2370,9 @@ class HubProgressFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -2221,6 +2439,9 @@ class OnboardingProgressFlags(BaseFlags):
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -2279,6 +2500,9 @@ class AutoModPresets(ArrayFlags):
 
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
 
     .. versionadded:: 2.0
 
@@ -2288,6 +2512,8 @@ class AutoModPresets(ArrayFlags):
         The raw value. You should query flags via the properties
         rather than using this raw value.
     """
+
+    __slots__ = ()
 
     @classmethod
     def all(cls: Type[Self]) -> Self:
@@ -2325,47 +2551,42 @@ class AutoModPresets(ArrayFlags):
 class MemberFlags(BaseFlags):
     r"""Wraps up the Discord Guild Member flags
 
-    .. versionadded:: 2.0
-
     .. container:: operations
 
         .. describe:: x == y
 
             Checks if two MemberFlags are equal.
-
         .. describe:: x != y
 
             Checks if two MemberFlags are not equal.
-
         .. describe:: x | y, x |= y
 
             Returns a MemberFlags instance with all enabled flags from
             both x and y.
-
         .. describe:: x & y, x &= y
 
             Returns a MemberFlags instance with only flags enabled on
             both x and y.
-
         .. describe:: x ^ y, x ^= y
 
             Returns a MemberFlags instance with only flags enabled on
             only one of x or y, not on both.
-
         .. describe:: ~x
 
             Returns a MemberFlags instance with all flags inverted from x.
-
         .. describe:: hash(x)
 
             Return the flag's hash.
-
         .. describe:: iter(x)
 
             Returns an iterator of ``(name, value)`` pairs. This allows it
             to be, for example, constructed as a dict or a list of pairs.
             Note that aliases are not shown.
+        .. describe:: bool(b)
 
+            Returns whether any flag is set to ``True``.
+
+    .. versionadded:: 2.0
 
     Attributes
     -----------
@@ -2373,6 +2594,8 @@ class MemberFlags(BaseFlags):
         The raw value. You should query flags via the properties
         rather than using this raw value.
     """
+
+    __slots__ = ()
 
     @flag_value
     def did_rejoin(self):
@@ -2393,3 +2616,265 @@ class MemberFlags(BaseFlags):
     def started_onboarding(self):
         """:class:`bool`: Returns ``True`` if the member has started onboarding."""
         return 1 << 3
+
+    @flag_value
+    def guest(self):
+        """:class:`bool`: Returns ``True`` if the member is a guest.
+        Guest members are members that joined through a guest invite, and are not full members of the guild.
+
+        .. versionadded:: 2.1
+        """
+        return 1 << 4
+
+
+@fill_with_flags()
+class ReadStateFlags(BaseFlags):
+    r"""Wraps up the Discord read state flags.
+
+    .. container:: operations
+
+        .. describe:: x == y
+
+            Checks if two ReadStateFlags are equal.
+        .. describe:: x != y
+
+            Checks if two ReadStateFlags are not equal.
+        .. describe:: x | y, x |= y
+
+            Returns a ReadStateFlags instance with all enabled flags from
+            both x and y.
+        .. describe:: x & y, x &= y
+
+            Returns a ReadStateFlags instance with only flags enabled on
+            both x and y.
+        .. describe:: x ^ y, x ^= y
+
+            Returns a ReadStateFlags instance with only flags enabled on
+            only one of x or y, not on both.
+        .. describe:: ~x
+
+            Returns a ReadStateFlags instance with all flags inverted from x.
+        .. describe:: hash(x)
+
+            Return the flag's hash.
+        .. describe:: iter(x)
+
+            Returns an iterator of ``(name, value)`` pairs. This allows it
+            to be, for example, constructed as a dict or a list of pairs.
+            Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
+
+    .. versionadded:: 2.1
+
+    Attributes
+    -----------
+    value: :class:`int`
+        The raw value. You should query flags via the properties
+        rather than using this raw value.
+    """
+
+    __slots__ = ()
+
+    @flag_value
+    def guild_channel(self):
+        """:class:`bool`: Returns ``True`` if the read state is for a guild channel."""
+        return 1 << 0
+
+    @flag_value
+    def thread(self):
+        """:class:`bool`: Returns ``True`` if the read state is for a thread."""
+        return 1 << 1
+
+
+@fill_with_flags()
+class InviteFlags(BaseFlags):
+    r"""Wraps up the Discord invite flags.
+
+    .. container:: operations
+
+        .. describe:: x == y
+
+            Checks if two InviteFlags are equal.
+        .. describe:: x != y
+
+            Checks if two InviteFlags are not equal.
+        .. describe:: x | y, x |= y
+
+            Returns a InviteFlags instance with all enabled flags from
+            both x and y.
+        .. describe:: x & y, x &= y
+
+            Returns a InviteFlags instance with only flags enabled on
+            both x and y.
+        .. describe:: x ^ y, x ^= y
+
+            Returns a InviteFlags instance with only flags enabled on
+            only one of x or y, not on both.
+        .. describe:: ~x
+
+            Returns a InviteFlags instance with all flags inverted from x.
+        .. describe:: hash(x)
+
+            Return the flag's hash.
+        .. describe:: iter(x)
+
+            Returns an iterator of ``(name, value)`` pairs. This allows it
+            to be, for example, constructed as a dict or a list of pairs.
+            Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
+
+    .. versionadded:: 2.1
+
+    Attributes
+    -----------
+    value: :class:`int`
+        The raw value. You should query flags via the properties
+        rather than using this raw value.
+    """
+
+    __slots__ = ()
+
+    @flag_value
+    def guest(self):
+        """:class:`bool`: Returns ``True`` if the invite is a guest invite. Guest invites grant temporary membership for the purposes of joining a voice channel."""
+        return 1 << 0
+
+    @flag_value
+    def viewed(self):
+        """:class:`bool`: Returns ``True`` if the invite has been viewed."""
+        return 1 << 1
+
+    @flag_value
+    def enhanced(self):
+        """:class:`bool`: Returns ``True`` if the invite is enhanced."""
+        return 1 << 2
+
+
+@fill_with_flags()
+class AttachmentFlags(BaseFlags):
+    r"""Wraps up the Discord Attachment flags
+
+    .. container:: operations
+
+        .. describe:: x == y
+
+            Checks if two AttachmentFlags are equal.
+        .. describe:: x != y
+
+            Checks if two AttachmentFlags are not equal.
+        .. describe:: x | y, x |= y
+
+            Returns a AttachmentFlags instance with all enabled flags from
+            both x and y.
+        .. describe:: x & y, x &= y
+
+            Returns a AttachmentFlags instance with only flags enabled on
+            both x and y.
+        .. describe:: x ^ y, x ^= y
+
+            Returns a AttachmentFlags instance with only flags enabled on
+            only one of x or y, not on both.
+        .. describe:: ~x
+
+            Returns a AttachmentFlags instance with all flags inverted from x.
+        .. describe:: hash(x)
+
+            Return the flag's hash.
+        .. describe:: iter(x)
+
+            Returns an iterator of ``(name, value)`` pairs. This allows it
+            to be, for example, constructed as a dict or a list of pairs.
+            Note that aliases are not shown.
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
+
+    .. versionadded:: 2.1
+
+    Attributes
+    -----------
+    value: :class:`int`
+        The raw value. You should query flags via the properties
+        rather than using this raw value.
+    """
+
+    @flag_value
+    def clip(self):
+        """:class:`bool`: Returns ``True`` if the attachment is a clip."""
+        return 1 << 0
+
+    @flag_value
+    def thumbnail(self):
+        """:class:`bool`: Returns ``True`` if the attachment is a media channel thumbnail."""
+        return 1 << 1
+
+    @flag_value
+    def remix(self):
+        """:class:`bool`: Returns ``True`` if the attachment has been edited using the remix feature."""
+        return 1 << 2
+
+
+@fill_with_flags()
+class RoleFlags(BaseFlags):
+    r"""Wraps up the Discord Role flags
+
+    .. container:: operations
+
+        .. describe:: x == y
+
+            Checks if two RoleFlags are equal.
+
+        .. describe:: x != y
+
+            Checks if two RoleFlags are not equal.
+
+        .. describe:: x | y, x |= y
+
+            Returns a RoleFlags instance with all enabled flags from
+            both x and y.
+
+        .. describe:: x & y, x &= y
+
+            Returns a RoleFlags instance with only flags enabled on
+            both x and y.
+
+        .. describe:: x ^ y, x ^= y
+
+            Returns a RoleFlags instance with only flags enabled on
+            only one of x or y, not on both.
+
+        .. describe:: ~x
+
+            Returns a RoleFlags instance with all flags inverted from x.
+
+        .. describe:: hash(x)
+
+            Return the flag's hash.
+
+        .. describe:: iter(x)
+
+            Returns an iterator of ``(name, value)`` pairs. This allows it
+            to be, for example, constructed as a dict or a list of pairs.
+            Note that aliases are not shown.
+
+        .. describe:: bool(b)
+
+            Returns whether any flag is set to ``True``.
+
+    .. versionadded:: 2.1
+
+    Attributes
+    -----------
+    value: :class:`int`
+        The raw value. You should query flags via the properties
+        rather than using this raw value.
+    """
+
+    @flag_value
+    def in_prompt(self):
+        """:class:`bool`: Returns ``True`` if the role can be selected by members in an onboarding prompt."""
+        return 1 << 0
